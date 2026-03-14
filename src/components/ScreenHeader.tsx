@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { theme } from '../constants/theme';
+import { Colors, Spacing } from '../theme/colors';
+import { Typography } from '../theme/typography';
 
 interface ScreenHeaderProps {
   title: string;
@@ -9,26 +10,23 @@ interface ScreenHeaderProps {
 
 export const ScreenHeader: React.FC<ScreenHeaderProps> = ({ title, subtitle }) => (
   <View style={styles.container}>
-    <Text style={styles.title}>{title}</Text>
-    {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+    <Text allowFontScaling={false} style={styles.title}>{title}</Text>
+    {subtitle ? <Text allowFontScaling={false} style={styles.subtitle}>{subtitle}</Text> : null}
   </View>
 );
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: theme.spacing.lg,
-    paddingTop: theme.spacing.md,
+    marginBottom: Spacing.lg,
+    paddingTop: Spacing.md,
   },
   title: {
-    color: theme.colors.textPrimary,
-    fontSize: 30,
-    fontWeight: '800',
-    letterSpacing: -0.5,
+    ...Typography.displayTitle,
+    color: Colors.offWhite,
   },
   subtitle: {
-    color: theme.colors.textSecondary,
+    ...Typography.body,
+    color: Colors.textMuted,
     marginTop: 6,
-    fontSize: 14,
-    lineHeight: 20,
   },
 });

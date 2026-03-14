@@ -1,6 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
-import { theme } from '../constants/theme';
+import { OrangeButton } from './ui/OrangeButton';
 
 interface PrimaryButtonProps {
   title: string;
@@ -15,30 +14,5 @@ export const PrimaryButton: React.FC<PrimaryButtonProps> = ({
   loading = false,
   disabled = false,
 }) => {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.button, (disabled || loading) && styles.disabled]}
-      disabled={disabled || loading}
-    >
-      {loading ? <ActivityIndicator color={theme.colors.background} /> : <Text style={styles.label}>{title}</Text>}
-    </Pressable>
-  );
+  return <OrangeButton label={title} onPress={onPress} loading={loading} disabled={disabled} size="lg" />;
 };
-
-const styles = StyleSheet.create({
-  button: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.md,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  disabled: {
-    opacity: 0.6,
-  },
-  label: {
-    color: theme.colors.background,
-    fontWeight: '700',
-    fontSize: 16,
-  },
-});
