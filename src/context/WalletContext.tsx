@@ -28,7 +28,8 @@ interface WalletContextValue extends WalletContextState {
     password: string,
     payerUserId: string,
     request: PaymentRequest,
-    preloadedShareA?: Uint8Array,
+    preloadedShareA: Uint8Array,
+    posToken: string,
   ) => Promise<TransactionPreview>;
   setReceiveAmount: (value: string) => void;
   receiveAmount: string;
@@ -40,6 +41,7 @@ interface WalletContextValue extends WalletContextState {
 const initialState: WalletContextState = {
   isSetupComplete: false,
   userId: null,
+  posToken: null,
   addresses: null,
   balances: {
     eth: '0.0000',
@@ -68,10 +70,13 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       return;
     }
 
+    const posToken = await secureStorage.getPosToken();
+
     setState((prev) => ({
       ...prev,
       isSetupComplete: true,
       userId: profile.userId,
+      posToken,
       addresses: profile.addresses,
     }));
   }, []);
@@ -97,18 +102,21 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       shareA = split.shareA;
       shareB = split.shareB;
 
-      // Register with the backend first so we get a userId to embed in the NFC card metadata.
-      // This allows POS mode to auto-resolve the payer's identity without manual entry.
+      // Register with the backend first so we get a userId + posToken to embed in the NFC card metadata.
+      // posToken enables POS-mode share fetches without device credentials.
       const deviceFingerprint = await createDeviceFingerprint();
       const register = await backendApi.registerUser({
         deviceFingerprint,
         shareB: Buffer.from(shareB).toString('base64'),
       });
 
-      await nfcService.writeShareToCard(shareA, { metadata: { userId: register.userId } });
+      await nfcService.writeShareToCard(shareA, {
+        metadata: { userId: register.userId, posToken: register.posToken },
+      });
 
       await secureStorage.saveSessionToken(register.sessionToken);
       await secureStorage.saveDeviceFingerprint(deviceFingerprint);
+      await secureStorage.savePosToken(register.posToken);
       await secureStorage.saveWalletProfile({
         userId: register.userId,
         addresses: {
@@ -121,6 +129,7 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
         ...prev,
         isSetupComplete: true,
         userId: register.userId,
+        posToken: register.posToken,
         addresses: {
           eth: derived.ethAddress,
           sol: derived.solAddress,
@@ -136,6 +145,7 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
     }
   }, []);
 
+  // Own-device reconstruction: uses device fingerprint + session token → safe for single-user payment.
   const reconstructSecrets = useCallback(
     async (password: string, userId: string, preloadedShareA?: Uint8Array) => {
       let shareA: Uint8Array | null = null;
@@ -146,32 +156,62 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
         if (!preloadedShareA) {
           setIsNfcScanning(true);
         }
+        // NFC errors are operational — re-throw directly (not security-sensitive).
         shareA = preloadedShareA ? Uint8Array.from(preloadedShareA) : await nfcService.readShareFromCard();
 
         const deviceFingerprint = await secureStorage.getDeviceFingerprint();
         const sessionToken = await secureStorage.getSessionToken();
 
         if (!deviceFingerprint || !sessionToken) {
-          throw new Error('Device session missing. Please login again.');
+          throw new Error('Device session missing. Please logout and login again.');
         }
 
-        const serverShare = await backendApi.fetchShareB({
-          userId,
-          deviceFingerprint,
-          sessionToken,
-        });
-
+        // Network errors are operational — re-throw directly.
+        const serverShare = await backendApi.fetchShareB({ userId, deviceFingerprint, sessionToken });
         shareB = Uint8Array.from(Buffer.from(serverShare.shareB, 'base64'));
         encryptedBlob = combineShares(shareA, shareB);
 
-        // We intentionally return one generic error on password/decryption failure to avoid share oracle leaks.
-        return decryptSeedBlob(encryptedBlob, password);
-      } catch (_error) {
-        throw new Error('Authentication failed. Please verify card and password and try again.');
+        // Decrypt errors use a generic message to prevent share oracle leaks.
+        try {
+          return decryptSeedBlob(encryptedBlob, password);
+        } catch (_decryptError) {
+          throw new Error('Authentication failed. Check your password and try again.');
+        }
       } finally {
         setIsNfcScanning(false);
         wipeUint8(encryptedBlob);
         wipeUint8(shareA);
+        wipeUint8(shareB);
+      }
+    },
+    [],
+  );
+
+  // POS reconstruction: merchant already holds payer's shareA from the NFC card.
+  // Uses posToken (from card metadata or payer's Wallet screen) — no merchant device credentials.
+  const reconstructSecretsForPOS = useCallback(
+    async (password: string, payerUserId: string, shareA: Uint8Array, posToken: string) => {
+      let shareACopy: Uint8Array | null = null;
+      let shareB: Uint8Array | null = null;
+      let encryptedBlob: Uint8Array | null = null;
+
+      try {
+        shareACopy = Uint8Array.from(shareA);
+
+        // Network errors re-throw directly.
+        const serverShare = await backendApi.fetchShareBForPOS({ userId: payerUserId, posToken });
+        shareB = Uint8Array.from(Buffer.from(serverShare.shareB, 'base64'));
+        encryptedBlob = combineShares(shareACopy, shareB);
+
+        // Decrypt errors use a generic message to prevent share oracle leaks.
+        try {
+          return decryptSeedBlob(encryptedBlob, password);
+        } catch (_decryptError) {
+          throw new Error('Authentication failed. Check the payer password and try again.');
+        }
+      } finally {
+        wipeUint8(encryptedBlob);
+        wipeUint8(shareACopy);
         wipeUint8(shareB);
       }
     },
@@ -235,10 +275,11 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       password: string,
       payerUserId: string,
       request: PaymentRequest,
-      preloadedShareA?: Uint8Array,
+      preloadedShareA: Uint8Array,
+      posToken: string,
     ): Promise<TransactionPreview> => {
       validatePaymentRequest(request);
-      const secrets = await reconstructSecrets(password, payerUserId, preloadedShareA);
+      const secrets = await reconstructSecretsForPOS(password, payerUserId, preloadedShareA, posToken);
       let txHash = '';
 
       try {
@@ -269,7 +310,7 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       addRecent(tx);
       return tx;
     },
-    [addRecent, reconstructSecrets],
+    [addRecent, reconstructSecretsForPOS],
   );
 
   const refreshBalances = useCallback(async () => {
@@ -308,6 +349,7 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
     [
       initializeNfc,
       hydrateWallet,
+      isNfcScanning,
       receiveAmount,
       refreshBalances,
       sendPaymentFromOwnDevice,

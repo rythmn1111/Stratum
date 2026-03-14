@@ -16,7 +16,7 @@ const ASSET_COLORS: Record<string, string> = {
 };
 
 export const WalletScreen: React.FC = () => {
-  const { balances, addresses, recentTransactions, refreshBalances, userId } = useWallet();
+  const { balances, addresses, recentTransactions, refreshBalances, userId, posToken } = useWallet();
 
   useEffect(() => {
     if (addresses) {
@@ -63,17 +63,30 @@ export const WalletScreen: React.FC = () => {
         ))}
       </GlassCard>
 
-      {/* User ID for POS mode */}
-      {userId ? (
+      {/* User ID + POS Token for POS mode */}
+      {(userId || posToken) ? (
         <>
-          <SectionLabel label="Wallet ID (POS Mode)" />
+          <SectionLabel label="POS Identity" />
           <GlassCard>
             <Text style={styles.userIdHint}>
-              Share this ID with a merchant so they can process card payments on your behalf.
+              Share both values with a merchant or let them scan your NFC card to authorize payments.
             </Text>
-            <Text style={styles.userIdValue} selectable numberOfLines={1}>
-              {userId}
-            </Text>
+            {userId ? (
+              <View style={styles.posRow}>
+                <Text style={styles.posRowLabel}>User ID</Text>
+                <Text style={styles.posRowValue} selectable numberOfLines={1}>
+                  {userId}
+                </Text>
+              </View>
+            ) : null}
+            {posToken ? (
+              <View style={[styles.posRow, styles.posRowLast]}>
+                <Text style={styles.posRowLabel}>POS Token</Text>
+                <Text style={styles.posRowValue} selectable numberOfLines={1}>
+                  {posToken}
+                </Text>
+              </View>
+            ) : null}
           </GlassCard>
         </>
       ) : null}
@@ -131,15 +144,32 @@ const styles = StyleSheet.create({
   userIdHint: {
     color: theme.colors.textSecondary,
     fontSize: 12,
-    marginBottom: theme.spacing.xs,
+    marginBottom: theme.spacing.sm,
     lineHeight: 17,
   },
-  userIdValue: {
+  posRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  posRowLast: {
+    borderBottomWidth: 0,
+    paddingBottom: 0,
+  },
+  posRowLabel: {
+    color: theme.colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 3,
+  },
+  posRowValue: {
     color: theme.colors.accent,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    letterSpacing: 0.4,
+    letterSpacing: 0.3,
   },
   heroLabel: {
     color: theme.colors.textSecondary,

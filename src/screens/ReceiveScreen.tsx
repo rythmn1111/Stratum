@@ -36,6 +36,9 @@ export const ReceiveScreen: React.FC = () => {
   const [payerUserIdAutoResolved, setPayerUserIdAutoResolved] = useState(false);
   const [payerPassword, setPayerPassword] = useState('');
   const [posShareA, setPosShareA] = useState<Uint8Array | null>(null);
+  const [posToken, setPosToken] = useState<string | null>(null);
+  const [posTokenAutoResolved, setPosTokenAutoResolved] = useState(false);
+  const [posTokenManual, setPosTokenManual] = useState('');
   const [isNfcReading, setIsNfcReading] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -50,6 +53,9 @@ export const ReceiveScreen: React.FC = () => {
       setPosShareA(null);
       setPayerUserId('');
       setPayerUserIdAutoResolved(false);
+      setPosToken(null);
+      setPosTokenAutoResolved(false);
+      setPosTokenManual('');
     }
   }, [mode, posShareA]);
 
@@ -85,17 +91,31 @@ export const ReceiveScreen: React.FC = () => {
       return;
     }
 
+    const resolvedPosToken = posTokenAutoResolved ? posToken : posTokenManual.trim();
+    if (!resolvedPosToken) {
+      Alert.alert(
+        'POS token required',
+        'Scan a card with embedded token or enter the payer\'s POS Token from their Wallet screen.',
+      );
+      return;
+    }
+
     setLoading(true);
     try {
-      const tx = await sendPaymentInPosMode(payerPassword, payerUserId, {
-        recipient: receiveAddress,
-        amount: receiveAmount.trim(),
-        asset,
-      }, posShareA);
+      const tx = await sendPaymentInPosMode(
+        payerPassword,
+        payerUserId,
+        { recipient: receiveAddress, amount: receiveAmount.trim(), asset },
+        posShareA,
+        resolvedPosToken,
+      );
       Alert.alert('Payment confirmed', `Transaction ${tx.txHash ?? 'submitted'} confirmed.`);
       setPayerPassword('');
       setPayerUserId('');
       setPayerUserIdAutoResolved(false);
+      setPosToken(null);
+      setPosTokenAutoResolved(false);
+      setPosTokenManual('');
       wipeUint8(posShareA);
       setPosShareA(null);
     } catch (error) {
@@ -117,10 +137,26 @@ export const ReceiveScreen: React.FC = () => {
       if (readResult.userId) {
         setPayerUserId(readResult.userId);
         setPayerUserIdAutoResolved(true);
-        Alert.alert('Card detected', 'Payer card loaded. User ID resolved from card metadata.');
       } else {
         setPayerUserIdAutoResolved(false);
-        Alert.alert('Card detected', 'Payer card loaded. Enter payer user ID for this legacy card.');
+      }
+
+      if (readResult.posToken) {
+        setPosToken(readResult.posToken);
+        setPosTokenAutoResolved(true);
+      } else {
+        setPosToken(null);
+        setPosTokenAutoResolved(false);
+      }
+
+      const hasId = !!readResult.userId;
+      const hasTok = !!readResult.posToken;
+      if (hasId && hasTok) {
+        Alert.alert('Card detected', 'Payer card loaded. User ID and POS token auto-resolved.');
+      } else if (hasId) {
+        Alert.alert('Card detected', 'Payer card loaded. Enter POS token manually (from payer\'s Wallet screen).');
+      } else {
+        Alert.alert('Card detected', 'Legacy card loaded. Enter payer user ID and POS token manually.');
       }
     } catch (error) {
       Alert.alert('NFC read failed', error instanceof Error ? error.message : 'Unable to read payer card.');
@@ -230,12 +266,12 @@ export const ReceiveScreen: React.FC = () => {
               keyboardType="decimal-pad"
             />
 
-            <SectionLabel label="Payer Details" />
             <GlassCard>
+              <Text style={styles.posMetaLabel}>Payer Details</Text>
               <Text style={styles.posMetaText}>
                 {payerUserIdAutoResolved
-                  ? 'Payer identity was auto-resolved from NFC card metadata.'
-                  : 'Legacy cards may not carry payer identity metadata. Enter payer user ID manually.'}
+                  ? 'Payer ID auto-resolved from card.'
+                  : 'Enter payer user ID (from their Wallet screen).'}
               </Text>
               <TextInput
                 style={[styles.input, styles.inputInCard]}
@@ -252,6 +288,30 @@ export const ReceiveScreen: React.FC = () => {
                 autoCorrect={false}
                 editable={!payerUserIdAutoResolved}
               />
+
+              <Text style={styles.posMetaText}>
+                {posTokenAutoResolved
+                  ? 'POS token auto-resolved from card.'
+                  : 'Enter POS token (from payer\'s Wallet screen → POS Token).'}
+              </Text>
+              {!posTokenAutoResolved && (
+                <TextInput
+                  style={[styles.input, styles.inputInCard]}
+                  value={posTokenManual}
+                  onChangeText={setPosTokenManual}
+                  placeholder="POS token"
+                  placeholderTextColor={theme.colors.textSecondary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              )}
+              {posTokenAutoResolved && (
+                <View style={styles.tokenResolvedRow}>
+                  <View style={styles.tokenResolvedDot} />
+                  <Text style={styles.tokenResolvedText}>POS token loaded from card</Text>
+                </View>
+              )}
+
               <TextInput
                 style={[styles.input, styles.inputLast]}
                 value={payerPassword}
@@ -362,6 +422,29 @@ const styles = StyleSheet.create({
     padding: theme.spacing.md,
     marginBottom: theme.spacing.sm,
     fontSize: 15,
+  },
+  tokenResolvedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: theme.spacing.sm,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(42,230,215,0.06)',
+    borderRadius: theme.radius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(42,230,215,0.25)',
+  },
+  tokenResolvedDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.colors.accent,
+  },
+  tokenResolvedText: {
+    color: theme.colors.accent,
+    fontSize: 13,
+    fontWeight: '600',
   },
   inputInCard: { marginBottom: theme.spacing.sm },
   inputLast: { marginBottom: 0 },
