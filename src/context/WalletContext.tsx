@@ -73,11 +73,12 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
   const setupWallet = useCallback(async (password: string, existingMnemonic?: string) => {
     let shareA: Uint8Array | null = null;
     let shareB: Uint8Array | null = null;
+    let encryptedBlob: Uint8Array | null = null;
 
     try {
       const mnemonic = existingMnemonic?.trim() || generateMnemonic();
       const derived = deriveKeysFromMnemonic(mnemonic);
-      const encryptedBlob = encryptSeedBlob(derived.mnemonic, password);
+      encryptedBlob = encryptSeedBlob(derived.mnemonic, password);
 
       const split = splitEncryptedBlob(encryptedBlob);
       shareA = split.shareA;
@@ -105,9 +106,9 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       }));
 
       wipeWalletSecrets(derived);
-      wipeString(encryptedBlob);
       wipeString(mnemonic);
     } finally {
+      wipeUint8(encryptedBlob);
       wipeUint8(shareA);
       wipeUint8(shareB);
     }
@@ -117,7 +118,7 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
     async (password: string, userId: string) => {
       let shareA: Uint8Array | null = null;
       let shareB: Uint8Array | null = null;
-      let encryptedBlob = '';
+      let encryptedBlob: Uint8Array | null = null;
 
       try {
         shareA = await nfcService.readShareFromCard();
@@ -143,9 +144,9 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       } catch (_error) {
         throw new Error('Authentication failed. Please verify card and password and try again.');
       } finally {
+        wipeUint8(encryptedBlob);
         wipeUint8(shareA);
         wipeUint8(shareB);
-        wipeString(encryptedBlob);
       }
     },
     [],

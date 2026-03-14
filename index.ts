@@ -12,7 +12,7 @@ install();
 
 global.Buffer = Buffer;
 global.process = process;
-global.TextEncoder = TextEncoder;
-global.TextDecoder = TextDecoder;
+global.TextEncoder = TextEncoder as unknown as typeof global.TextEncoder;
+global.TextDecoder = TextDecoder as unknown as typeof global.TextDecoder;
 
 AppRegistry.registerComponent(appName, () => App);

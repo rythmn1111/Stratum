@@ -1,7 +1,7 @@
 import 'react-native-get-random-values';
 import QuickCrypto from 'react-native-quick-crypto';
 import { CONFIG } from '../config';
-import { EncryptedBlobPayload, SplitShares } from '../types';
+import { SplitShares } from '../types';
 import { wipeArray, wipeString, wipeUint8 } from '../utils/memory';
 
 export interface GeneratedWalletSecrets {
@@ -11,6 +11,11 @@ export interface GeneratedWalletSecrets {
   ethAddress: string;
   solAddress: string;
 }
+
+const ENCRYPTED_BLOB_VERSION = 1;
+const SALT_LENGTH = 16;
+const IV_LENGTH = 12;
+const TAG_LENGTH = 16;
 
 const deriveAesKey = (password: string, salt: Uint8Array) => {
   const { pbkdf2Sync } = QuickCrypto as any;
@@ -57,65 +62,74 @@ export const deriveKeysFromMnemonic = (mnemonic: string): GeneratedWalletSecrets
 export const encryptSeedBlob = (
   mnemonic: string,
   password: string,
-): string => {
+): Uint8Array => {
   const { randomBytes, createCipheriv } = QuickCrypto as any;
+  const bip39 = require('bip39') as typeof import('bip39');
 
   const iv = randomBytes(12);
-  const salt = randomBytes(32);
+  const salt = randomBytes(SALT_LENGTH);
   const key = deriveAesKey(password, salt);
-
-  const payload = JSON.stringify({
-    mnemonic,
-  });
+  const payload = Buffer.from(bip39.mnemonicToEntropy(mnemonic), 'hex');
 
   const cipher = createCipheriv('aes-256-gcm', key as never, iv as never);
-  const encrypted = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
+  const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
   const tag = cipher.getAuthTag();
 
-  const result: EncryptedBlobPayload = {
-    iv: Buffer.from(iv).toString('base64'),
-    salt: Buffer.from(salt).toString('base64'),
-    ciphertext: encrypted.toString('base64'),
-    tag: tag.toString('base64'),
-    kdfIterations: CONFIG.pbkdf2Iterations,
-  };
-
   key.fill(0);
-  wipeString(payload);
+  payload.fill(0);
 
-  return JSON.stringify(result);
+  return Uint8Array.from(
+    Buffer.concat([
+      Buffer.from([ENCRYPTED_BLOB_VERSION]),
+      Buffer.from(salt),
+      Buffer.from(iv),
+      Buffer.from(tag),
+      encrypted,
+    ]),
+  );
 };
 
-export const decryptSeedBlob = (encryptedBlob: string, password: string): GeneratedWalletSecrets => {
+export const decryptSeedBlob = (encryptedBlob: Uint8Array, password: string): GeneratedWalletSecrets => {
   const { createDecipheriv } = QuickCrypto as any;
+  const bip39 = require('bip39') as typeof import('bip39');
 
-  const encryptedPayload = JSON.parse(encryptedBlob) as EncryptedBlobPayload;
+  const blob = Buffer.from(encryptedBlob);
+  const version = blob[0];
 
-  const iv = Buffer.from(encryptedPayload.iv, 'base64');
-  const salt = Buffer.from(encryptedPayload.salt, 'base64');
-  const ciphertext = Buffer.from(encryptedPayload.ciphertext, 'base64');
-  const tag = Buffer.from(encryptedPayload.tag, 'base64');
+  if (version !== ENCRYPTED_BLOB_VERSION) {
+    throw new Error('Unsupported wallet payload format.');
+  }
+
+  const saltStart = 1;
+  const ivStart = saltStart + SALT_LENGTH;
+  const tagStart = ivStart + IV_LENGTH;
+  const ciphertextStart = tagStart + TAG_LENGTH;
+
+  const salt = blob.subarray(saltStart, ivStart);
+  const iv = blob.subarray(ivStart, tagStart);
+  const tag = blob.subarray(tagStart, ciphertextStart);
+  const ciphertext = blob.subarray(ciphertextStart);
 
   const key = deriveAesKey(password, salt);
   const decipher = createDecipheriv('aes-256-gcm', key as never, iv as never);
   decipher.setAuthTag(tag as never);
 
-  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
-  const decryptedPayload = JSON.parse(decrypted) as { mnemonic: string };
-  const data = deriveKeysFromMnemonic(decryptedPayload.mnemonic);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  const mnemonic = bip39.entropyToMnemonic(decrypted.toString('hex'));
+  const data = deriveKeysFromMnemonic(mnemonic);
 
   key.fill(0);
-  wipeString(decrypted);
+  decrypted.fill(0);
 
   return data;
 };
 
-export const splitEncryptedBlob = (encryptedBlob: string): SplitShares => {
+export const splitEncryptedBlob = (encryptedBlob: Uint8Array): SplitShares => {
   const { split } = require('shamirs-secret-sharing') as {
     split: (secret: Buffer, opts: { shares: number; threshold: number }) => [Uint8Array, Uint8Array];
   };
 
-  const blobBytes = Buffer.from(encryptedBlob, 'utf8');
+  const blobBytes = Buffer.from(encryptedBlob);
 
   // Shamir shares are information-theoretic fragments; one share reveals no usable secret.
   const [shareA, shareB] = split(blobBytes, { shares: 2, threshold: 2 }) as [Uint8Array, Uint8Array];
@@ -123,15 +137,13 @@ export const splitEncryptedBlob = (encryptedBlob: string): SplitShares => {
   return { shareA, shareB };
 };
 
-export const combineShares = (shareA: Uint8Array, shareB: Uint8Array): string => {
+export const combineShares = (shareA: Uint8Array, shareB: Uint8Array): Uint8Array => {
   const { combine } = require('shamirs-secret-sharing') as {
     combine: (shares: Uint8Array[]) => Uint8Array;
   };
 
   const combined = combine([shareA, shareB]);
-  const reconstructed = Buffer.from(combined).toString('utf8');
-  wipeUint8(combined);
-  return reconstructed;
+  return Uint8Array.from(combined);
 };
 
 export const createDeviceFingerprint = async (): Promise<string> => {
