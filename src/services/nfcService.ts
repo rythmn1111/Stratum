@@ -1,6 +1,8 @@
 import NfcManager, { Ndef, NfcTech, NfcError, NfcEvents } from 'react-native-nfc-manager';
 
-const WALLET_RECORD_TYPE = 'application/vnd.nfc-split-wallet.share';
+const WALLET_RECORD_TYPE = 'sw:1';
+const LEGACY_WALLET_RECORD_TYPE = 'application/vnd.nfc-split-wallet.share';
+const WALLET_RECORD_TNF = Ndef.TNF_EXTERNAL_TYPE;
 
 const buildPayload = (bytes: Uint8Array): number[] => {
   return Array.from(bytes);
@@ -32,7 +34,7 @@ export const nfcService = {
       const tag = await NfcManager.getTag();
 
       const records = [
-        Ndef.record(Ndef.TNF_MIME_MEDIA, WALLET_RECORD_TYPE, [], buildPayload(shareA)),
+        Ndef.record(WALLET_RECORD_TNF, WALLET_RECORD_TYPE, [], buildPayload(shareA)),
       ];
 
       const bytes = Ndef.encodeMessage(records);
@@ -92,7 +94,7 @@ export const nfcService = {
       const record = ndefMessage.find((item) => {
         try {
           const decodedType = Ndef.util.bytesToString(item.type);
-          return decodedType === WALLET_RECORD_TYPE;
+          return decodedType === WALLET_RECORD_TYPE || decodedType === LEGACY_WALLET_RECORD_TYPE;
         } catch (_err) {
           return false;
         }

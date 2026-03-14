@@ -4,11 +4,76 @@ import { CONFIG } from '../config';
 const ERC20_ABI = [
   'function transfer(address to, uint amount) returns (bool)',
   'function decimals() view returns (uint8)',
+  'function balanceOf(address account) view returns (uint256)',
 ];
 
 export interface BroadcastResult {
   txHash: string;
 }
+
+export interface WalletBalanceSnapshot {
+  eth: string;
+  sol: string;
+  usdcEth: string;
+  usdcSol: string;
+}
+
+export const fetchBalances = async (
+  addresses: { eth: string; sol: string },
+): Promise<WalletBalanceSnapshot> => {
+  const { ethers } = require('ethers') as typeof import('ethers');
+  const { Connection, LAMPORTS_PER_SOL, PublicKey } = require('@solana/web3.js') as typeof import('@solana/web3.js');
+
+  const provider = new ethers.JsonRpcProvider(CONFIG.ethRpcUrl);
+  const solConnection = new Connection(CONFIG.solRpcUrl, 'confirmed');
+
+  const [ethBalanceWei, solLamports] = await Promise.all([
+    provider.getBalance(addresses.eth),
+    solConnection.getBalance(new PublicKey(addresses.sol), 'confirmed'),
+  ]);
+
+  let usdcEth = '0.00';
+  if (CONFIG.usdcEthContract) {
+    try {
+      const usdcEthContract = new ethers.Contract(CONFIG.usdcEthContract, ERC20_ABI, provider);
+      const [decimals, rawBalance] = await Promise.all([
+        usdcEthContract.decimals(),
+        usdcEthContract.balanceOf(addresses.eth),
+      ]);
+      usdcEth = Number.parseFloat(ethers.formatUnits(rawBalance, decimals)).toFixed(2);
+    } catch (_err) {
+      usdcEth = '0.00';
+    }
+  }
+
+  let usdcSol = '0.00';
+  if (CONFIG.usdcSolMint) {
+    try {
+      const tokenAccounts = await solConnection.getParsedTokenAccountsByOwner(
+        new PublicKey(addresses.sol),
+        { mint: new PublicKey(CONFIG.usdcSolMint) },
+        'confirmed',
+      );
+
+      const total = tokenAccounts.value.reduce((sum, item) => {
+        const info = (item.account.data as any)?.parsed?.info;
+        const uiAmount = Number.parseFloat(info?.tokenAmount?.uiAmountString ?? '0');
+        return sum + (Number.isFinite(uiAmount) ? uiAmount : 0);
+      }, 0);
+
+      usdcSol = total.toFixed(2);
+    } catch (_err) {
+      usdcSol = '0.00';
+    }
+  }
+
+  return {
+    eth: Number.parseFloat(ethers.formatEther(ethBalanceWei)).toFixed(4),
+    sol: (solLamports / LAMPORTS_PER_SOL).toFixed(4),
+    usdcEth,
+    usdcSol,
+  };
+};
 
 export const sendEth = async (
   privateKey: string,

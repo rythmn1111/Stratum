@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { randomBytes } from 'crypto';
 import { pool } from '../config/db';
+import { env } from '../config/env';
 
 export interface UserShareRecord {
   userId: string;
@@ -9,12 +10,24 @@ export interface UserShareRecord {
   shareB: string;
 }
 
+const memoryStore = new Map<string, UserShareRecord>();
+
 export const createUserShare = async (
   deviceFingerprint: string,
   shareB: string,
 ): Promise<{ userId: string; sessionToken: string }> => {
   const userId = randomUUID();
   const sessionToken = randomBytes(32).toString('hex');
+
+  if (!pool || env.useInMemoryStore) {
+    memoryStore.set(userId, {
+      userId,
+      sessionToken,
+      deviceFingerprint,
+      shareB,
+    });
+    return { userId, sessionToken };
+  }
 
   await pool.query(
     `
@@ -32,6 +45,19 @@ export const fetchShareB = async (
   deviceFingerprint: string,
   sessionToken: string,
 ): Promise<string | null> => {
+  if (!pool || env.useInMemoryStore) {
+    const record = memoryStore.get(userId);
+    if (!record) {
+      return null;
+    }
+
+    if (record.deviceFingerprint !== deviceFingerprint || record.sessionToken !== sessionToken) {
+      return null;
+    }
+
+    return record.shareB;
+  }
+
   const result = await pool.query(
     `
       SELECT share_b
@@ -57,6 +83,24 @@ export const updateShareB = async (
   sessionToken: string,
   nextShareB: string,
 ): Promise<boolean> => {
+  if (!pool || env.useInMemoryStore) {
+    const record = memoryStore.get(userId);
+    if (!record) {
+      return false;
+    }
+
+    if (record.deviceFingerprint !== deviceFingerprint || record.sessionToken !== sessionToken) {
+      return false;
+    }
+
+    memoryStore.set(userId, {
+      ...record,
+      shareB: nextShareB,
+    });
+
+    return true;
+  }
+
   const result = await pool.query(
     `
       UPDATE user_shares
@@ -69,5 +113,5 @@ export const updateShareB = async (
     [userId, deviceFingerprint, sessionToken, nextShareB],
   );
 
-  return result.rowCount > 0;
+  return (result.rowCount ?? 0) > 0;
 };
