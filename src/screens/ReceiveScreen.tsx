@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -17,8 +17,10 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { SectionLabel } from '../components/SectionLabel';
 import { theme } from '../constants/theme';
 import { useWallet } from '../context/WalletContext';
+import { nfcService } from '../services/nfcService';
 import { truncateAddress } from '../utils/format';
 import { ChainAsset } from '../types';
+import { wipeUint8 } from '../utils/memory';
 
 type ReceiveMode = 'receive' | 'pos';
 
@@ -31,6 +33,8 @@ export const ReceiveScreen: React.FC = () => {
   const [asset, setAsset] = useState<ChainAsset>('ETH');
   const [payerUserId, setPayerUserId] = useState('');
   const [payerPassword, setPayerPassword] = useState('');
+  const [posShareA, setPosShareA] = useState<Uint8Array | null>(null);
+  const [isNfcReading, setIsNfcReading] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const receiveAddress = useMemo(
@@ -38,7 +42,25 @@ export const ReceiveScreen: React.FC = () => {
     [addresses, asset],
   );
 
+  useEffect(() => {
+    if (mode !== 'pos' && posShareA) {
+      wipeUint8(posShareA);
+      setPosShareA(null);
+    }
+  }, [mode, posShareA]);
+
+  useEffect(() => () => {
+    if (posShareA) {
+      wipeUint8(posShareA);
+    }
+  }, [posShareA]);
+
   const onProcessPosPayment = async () => {
+    if (!posShareA) {
+      Alert.alert('Card required', 'Tap payer NFC card first to load authorization share.');
+      return;
+    }
+
     if (!receiveAddress) {
       Alert.alert('Address missing', 'Merchant wallet address is unavailable.');
       return;
@@ -49,14 +71,32 @@ export const ReceiveScreen: React.FC = () => {
         recipient: receiveAddress,
         amount: receiveAmount || '0',
         asset,
-      });
+      }, posShareA);
       Alert.alert('Payment confirmed', `Transaction ${tx.txHash ?? 'submitted'} confirmed.`);
       setPayerPassword('');
       setPayerUserId('');
+      wipeUint8(posShareA);
+      setPosShareA(null);
     } catch (error) {
       Alert.alert('Payment failed', error instanceof Error ? error.message : 'Unable to process payment.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onReadPayerCard = async () => {
+    setIsNfcReading(true);
+    try {
+      const readShare = await nfcService.readShareFromCard();
+      if (posShareA) {
+        wipeUint8(posShareA);
+      }
+      setPosShareA(readShare);
+      Alert.alert('Card detected', 'Payer card share loaded. Enter payer credentials to continue.');
+    } catch (error) {
+      Alert.alert('NFC read failed', error instanceof Error ? error.message : 'Unable to read payer card.');
+    } finally {
+      setIsNfcReading(false);
     }
   };
 
@@ -129,6 +169,28 @@ export const ReceiveScreen: React.FC = () => {
 
         {mode === 'pos' && (
           <>
+            <GlassCard>
+              <View style={styles.qrBox}>
+                {receiveAddress ? (
+                  <QRCode value={receiveAddress} size={180} />
+                ) : (
+                  <Text style={styles.noAddr}>No address — complete wallet setup first.</Text>
+                )}
+              </View>
+            </GlassCard>
+
+            <GlassCard>
+              <Text style={styles.posMetaLabel}>NFC Reader</Text>
+              <Text style={styles.posMetaText}>
+                {isNfcReading ? 'Listening for NFC card… keep card near phone.' : posShareA ? 'Payer card loaded. Ready for password.' : 'Tap to scan payer card and load Share A.'}
+              </Text>
+              <PrimaryButton
+                title={posShareA ? 'Rescan Payer Card' : 'Tap Payer Card'}
+                onPress={onReadPayerCard}
+                loading={isNfcReading}
+              />
+            </GlassCard>
+
             <SectionLabel label="Amount to Collect" />
             <TextInput
               style={styles.input}
@@ -220,6 +282,20 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     textAlign: 'center',
     paddingVertical: theme.spacing.md,
+  },
+  posMetaLabel: {
+    color: theme.colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  posMetaText: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: theme.spacing.sm,
   },
   addrLabel: {
     color: theme.colors.textSecondary,

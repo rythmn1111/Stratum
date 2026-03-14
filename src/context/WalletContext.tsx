@@ -26,6 +26,7 @@ interface WalletContextValue extends WalletContextState {
     password: string,
     payerUserId: string,
     request: PaymentRequest,
+    preloadedShareA?: Uint8Array,
   ) => Promise<TransactionPreview>;
   setReceiveAmount: (value: string) => void;
   receiveAmount: string;
@@ -115,13 +116,13 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
   }, []);
 
   const reconstructSecrets = useCallback(
-    async (password: string, userId: string) => {
+    async (password: string, userId: string, preloadedShareA?: Uint8Array) => {
       let shareA: Uint8Array | null = null;
       let shareB: Uint8Array | null = null;
       let encryptedBlob: Uint8Array | null = null;
 
       try {
-        shareA = await nfcService.readShareFromCard();
+        shareA = preloadedShareA ? Uint8Array.from(preloadedShareA) : await nfcService.readShareFromCard();
 
         const deviceFingerprint = await secureStorage.getDeviceFingerprint();
         const sessionToken = await secureStorage.getSessionToken();
@@ -204,8 +205,29 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
   );
 
   const sendPaymentInPosMode = useCallback(
-    async (password: string, payerUserId: string, request: PaymentRequest): Promise<TransactionPreview> => {
-      const txHash = await signAndBroadcast(request, password, payerUserId);
+    async (
+      password: string,
+      payerUserId: string,
+      request: PaymentRequest,
+      preloadedShareA?: Uint8Array,
+    ): Promise<TransactionPreview> => {
+      const secrets = await reconstructSecrets(password, payerUserId, preloadedShareA);
+      let txHash = '';
+
+      try {
+        if (request.asset === 'ETH') {
+          txHash = (await sendEth(secrets.ethPrivateKey, request.recipient, request.amount)).txHash;
+        } else if (request.asset === 'USDC_ETH') {
+          txHash = (await sendUsdcOnEthereum(secrets.ethPrivateKey, request.recipient, request.amount)).txHash;
+        } else if (request.asset === 'SOL') {
+          txHash = (await sendSol(secrets.solPrivateKeyBase58, request.recipient, request.amount)).txHash;
+        } else {
+          txHash = (await sendUsdcOnSolana(secrets.solPrivateKeyBase58, request.recipient, request.amount)).txHash;
+        }
+      } finally {
+        wipeWalletSecrets(secrets);
+      }
+
       const tx: TransactionPreview = {
         id: (QuickCrypto as any).randomBytes(8).toString('hex'),
         chain: request.asset.includes('SOL') || request.asset === 'SOL' ? 'solana' : 'ethereum',
@@ -220,7 +242,7 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       addRecent(tx);
       return tx;
     },
-    [addRecent, signAndBroadcast],
+    [addRecent, reconstructSecrets],
   );
 
   const refreshBalances = useCallback(async () => {

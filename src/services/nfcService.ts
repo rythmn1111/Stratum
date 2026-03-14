@@ -10,8 +10,7 @@ const buildPayload = (bytes: Uint8Array): number[] => {
 
 export const nfcService = {
   async initialize(): Promise<void> {
-    try{
-          const supported = await NfcManager.isSupported();
+    const supported = await NfcManager.isSupported();
     if (!supported) {
       throw new Error('NFC is not supported on this device.');
     }
@@ -22,10 +21,6 @@ export const nfcService = {
     }
 
     await NfcManager.start();
-    }catch(err){
-      console.warn('NFC initialization error (ignored):', err);
-    }
-
   },
 
   async writeShareToCard(shareA: Uint8Array, tagPassword?: string): Promise<void> {

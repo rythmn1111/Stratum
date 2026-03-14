@@ -156,11 +156,94 @@ export const sendSol = async (
 };
 
 export const sendUsdcOnSolana = async (
-  _privateKeyBase64: string,
-  _to: string,
-  _amountUsdc: string,
+  privateKeyBase64: string,
+  to: string,
+  amountUsdc: string,
 ): Promise<BroadcastResult> => {
-  // Placeholder for SPL token transfer implementation.
-  // Implement via @solana/spl-token once token account lifecycle assumptions are finalized.
-  throw new Error('USDC on Solana transfer is a placeholder and not implemented yet.');
+  const { Connection, Keypair, PublicKey, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js') as typeof import('@solana/web3.js');
+  const {
+    createTransferInstruction,
+    getAssociatedTokenAddressSync,
+    createAssociatedTokenAccountInstruction,
+    getMint,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  } = require('@solana/spl-token') as typeof import('@solana/spl-token');
+
+  if (!CONFIG.usdcSolMint) {
+    throw new Error('USDC Solana mint is not configured.');
+  }
+
+  const solConnection = new Connection(CONFIG.solRpcUrl, 'confirmed');
+  const mint = new PublicKey(CONFIG.usdcSolMint);
+  const destinationOwner = new PublicKey(to);
+
+  const secretKey = Buffer.from(privateKeyBase64, 'base64');
+  const fromKeypair = Keypair.fromSecretKey(Uint8Array.from(secretKey));
+
+  try {
+    const mintInfo = await getMint(solConnection, mint, 'confirmed');
+    const amount = BigInt(Math.round(Number.parseFloat(amountUsdc) * 10 ** mintInfo.decimals));
+
+    if (amount <= 0n) {
+      throw new Error('Amount must be greater than zero.');
+    }
+
+    const fromTokenAddress = getAssociatedTokenAddressSync(
+      mint,
+      fromKeypair.publicKey,
+      false,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+    );
+
+    const toTokenAddress = getAssociatedTokenAddressSync(
+      mint,
+      destinationOwner,
+      false,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+    );
+
+    const destinationTokenInfo = await solConnection.getAccountInfo(toTokenAddress, 'confirmed');
+    const tx = new Transaction();
+
+    if (!destinationTokenInfo) {
+      tx.add(
+        createAssociatedTokenAccountInstruction(
+          fromKeypair.publicKey,
+          toTokenAddress,
+          destinationOwner,
+          mint,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID,
+        ),
+      );
+    }
+
+    tx.add(
+      createTransferInstruction(
+        fromTokenAddress,
+        toTokenAddress,
+        fromKeypair.publicKey,
+        amount,
+        [],
+        TOKEN_PROGRAM_ID,
+      ),
+    );
+
+    const signature = await sendAndConfirmTransaction(solConnection, tx, [fromKeypair], {
+      commitment: 'confirmed',
+      skipPreflight: false,
+    });
+
+    return { txHash: signature };
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`USDC transfer on Solana failed: ${error.message}`);
+    }
+    throw new Error('USDC transfer on Solana failed.');
+  } finally {
+    secretKey.fill(0);
+  }
 };

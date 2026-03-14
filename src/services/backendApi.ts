@@ -33,10 +33,36 @@ const postJson = async <TReq, TRes>(path: string, payload: TReq): Promise<TRes> 
 
 export const backendApi = {
   registerUser(payload: BackendRegisterRequest): Promise<BackendRegisterResponse> {
+    /*
+      Endpoint: POST /api/user/register
+      Request:
+      {
+        deviceFingerprint: string,
+        shareB: string (base64)
+      }
+      Response:
+      {
+        userId: string,
+        sessionToken: string
+      }
+    */
     return postJson<BackendRegisterRequest, BackendRegisterResponse>('/api/user/register', payload);
   },
 
   fetchShareB(payload: BackendFetchShareRequest): Promise<BackendFetchShareResponse> {
+    /*
+      Endpoint: POST /api/share/fetch
+      Request:
+      {
+        userId: string,
+        deviceFingerprint: string,
+        sessionToken: string
+      }
+      Response:
+      {
+        shareB: string (base64)
+      }
+    */
     return postJson<BackendFetchShareRequest, BackendFetchShareResponse>('/api/share/fetch', payload);
   },
 
@@ -46,6 +72,20 @@ export const backendApi = {
     sessionToken: string;
     nextShareB: string;
   }): Promise<{ success: boolean }> {
+    /*
+      Endpoint: POST /api/share/update
+      Request:
+      {
+        userId: string,
+        deviceFingerprint: string,
+        sessionToken: string,
+        nextShareB: string (base64)
+      }
+      Response:
+      {
+        success: boolean
+      }
+    */
     return postJson('/api/share/update', payload);
   },
 };

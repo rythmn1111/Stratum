@@ -247,7 +247,7 @@ Wallet screen labels balances by chain/network so users can see Ethereum vs Sola
 
 ## Known Limitations
 
-- USDC transfer on Solana is placeholder and not yet implemented.
+- POS payer identity still requires payer userId input on merchant device (identity exchange UX to be improved).
 - Recovery and key rotation flows are placeholder-level.
 - Demo backend in-memory mode is not persistent.
 - Public RPC endpoints may rate-limit under heavy usage.
