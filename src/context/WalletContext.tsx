@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useMemo, useState } from
 import QuickCrypto from 'react-native-quick-crypto';
 import { Buffer } from 'buffer';
 import { backendApi } from '../services/backendApi';
-import { sendEth, sendSol, sendUsdcOnEthereum, sendUsdcOnSolana } from '../services/blockchainService';
+import { fetchBalances, sendEth, sendSol, sendUsdcOnEthereum, sendUsdcOnSolana } from '../services/blockchainService';
 import {
   combineShares,
   createDeviceFingerprint,
@@ -224,14 +224,17 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
   );
 
   const refreshBalances = useCallback(async () => {
-    // Placeholder: add multicall/indexer-backed balance fetch to avoid RPC fanout.
+    if (!state.addresses) {
+      return;
+    }
+
+    const live = await fetchBalances(state.addresses);
+
     setState((prev) => ({
       ...prev,
-      balances: {
-        ...prev.balances,
-      },
+      balances: live,
     }));
-  }, []);
+  }, [state.addresses]);
 
   const logout = useCallback(async () => {
     await secureStorage.clearAuth();
