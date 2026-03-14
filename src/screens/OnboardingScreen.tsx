@@ -95,7 +95,7 @@ export const OnboardingScreen: React.FC = () => {
   // ── Step indicator ──────────────────────────────────────────
   const currentIndex = stepIndex[step];
 
-  const StepIndicator = () => (
+  const renderStepIndicator = () => (
     <View style={styles.stepRow}>
       {STEP_LABELS.map((label, i) => (
         <React.Fragment key={label}>
@@ -118,7 +118,7 @@ export const OnboardingScreen: React.FC = () => {
   );
 
   // ── Welcome step ─────────────────────────────────────────────
-  const WelcomeStep = () => (
+  const renderWelcomeStep = () => (
     <View>
       <Text style={styles.hero}>NFC Split-Key{'\n'}Wallet</Text>
       <Text style={styles.heroSub}>
@@ -147,7 +147,7 @@ export const OnboardingScreen: React.FC = () => {
   );
 
   // ── Create: seed display step ─────────────────────────────────
-  const CreateSeedStep = () => {
+  const renderCreateSeedStep = () => {
     const words = mnemonic.split(' ');
     return (
       <View>
@@ -200,7 +200,7 @@ export const OnboardingScreen: React.FC = () => {
   };
 
   // ── Import: seed entry step ───────────────────────────────────
-  const ImportSeedStep = () => (
+  const renderImportSeedStep = () => (
     <View>
       <Text style={styles.stepTitle}>Import Seed Phrase</Text>
       <Text style={styles.stepDesc}>
@@ -226,7 +226,7 @@ export const OnboardingScreen: React.FC = () => {
   );
 
   // ── Password step ─────────────────────────────────────────────
-  const PasswordStep = () => (
+  const renderPasswordStep = () => (
     <View>
       <Text style={styles.stepTitle}>Protect Your Wallet</Text>
       <Text style={styles.stepDesc}>
@@ -277,11 +277,11 @@ export const OnboardingScreen: React.FC = () => {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <StepIndicator />
-        {step === 'welcome' && <WelcomeStep />}
-        {step === 'seed' && mode === 'create' && <CreateSeedStep />}
-        {step === 'seed' && mode === 'import' && <ImportSeedStep />}
-        {step === 'password' && <PasswordStep />}
+        {renderStepIndicator()}
+        {step === 'welcome' && renderWelcomeStep()}
+        {step === 'seed' && mode === 'create' && renderCreateSeedStep()}
+        {step === 'seed' && mode === 'import' && renderImportSeedStep()}
+        {step === 'password' && renderPasswordStep()}
       </ScrollView>
     </KeyboardAvoidingView>
   );
