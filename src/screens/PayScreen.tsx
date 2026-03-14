@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -12,15 +12,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import { GlassCard } from '../components/GlassCard';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { SectionLabel } from '../components/SectionLabel';
 import { theme } from '../constants/theme';
 import { useWallet } from '../context/WalletContext';
-import { nfcService } from '../services/nfcService';
-import { wipeUint8 } from '../utils/memory';
 import { ChainAsset } from '../types';
 import { isPositiveAmount, validateRecipientByAsset } from '../utils/validation';
 
@@ -41,30 +38,37 @@ export const PayScreen: React.FC = () => {
   const [amount, setAmount] = useState('');
   const [asset, setAsset] = useState<ChainAsset>('ETH');
   const [loading, setLoading] = useState(false);
-  const [tapToPayEnabled, setTapToPayEnabled] = useState(true);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
-  const lastTapAtRef = useRef(0);
+  const canSubmit = useMemo(() => !!(recipient && amount), [recipient, amount]);
 
-  const canSubmit = useMemo(() => !!(password && recipient && amount), [password, recipient, amount]);
-
-  const submit = async (preloadedShareA?: Uint8Array) => {
+  const validateDraft = (): { recipient: string; amount: string } | null => {
     const trimmedRecipient = recipient.trim();
     const trimmedAmount = amount.trim();
 
-    if (!password.trim()) {
-      Alert.alert('Missing password', 'Enter wallet password to authorize this payment.');
-      return;
-    }
-
     if (!isPositiveAmount(trimmedAmount)) {
       Alert.alert('Invalid amount', 'Amount must be greater than zero.');
-      return;
+      return null;
     }
 
     try {
       validateRecipientByAsset(asset, trimmedRecipient);
     } catch (error) {
       Alert.alert('Invalid recipient', error instanceof Error ? error.message : 'Invalid recipient address.');
+      return null;
+    }
+
+    return { recipient: trimmedRecipient, amount: trimmedAmount };
+  };
+
+  const submit = async () => {
+    if (!password.trim()) {
+      Alert.alert('Missing password', 'Enter wallet password to authorize this payment.');
+      return;
+    }
+
+    const draft = validateDraft();
+    if (!draft) {
       return;
     }
 
@@ -72,64 +76,28 @@ export const PayScreen: React.FC = () => {
     try {
       const tx = await sendPaymentFromOwnDevice(
         password,
-        { recipient: trimmedRecipient, amount: trimmedAmount, asset },
-        preloadedShareA,
+        { recipient: draft.recipient, amount: draft.amount, asset },
       );
       Alert.alert('Payment sent', `Transaction ${tx.txHash ?? 'submitted'} confirmed.`);
       setPassword('');
       setRecipient('');
       setAmount('');
+      setShowConfirmModal(false);
     } catch (error) {
       Alert.alert('Payment failed', error instanceof Error ? error.message : 'Unable to send payment.');
     } finally {
       setLoading(false);
-      if (preloadedShareA) {
-        wipeUint8(preloadedShareA);
-      }
     }
   };
 
-  const onTapTagWhileFocused = useCallback(async (tag: unknown) => {
-    if (!tapToPayEnabled || loading) {
+  const openConfirmation = () => {
+    const draft = validateDraft();
+    if (!draft) {
       return;
     }
 
-    const now = Date.now();
-    if (now - lastTapAtRef.current < 1200) {
-      return;
-    }
-    lastTapAtRef.current = now;
-
-    if (!password.trim() || !recipient.trim() || !amount.trim()) {
-      return;
-    }
-
-    try {
-      const readResult = await nfcService.readCardDataFromTag(tag);
-      await submit(readResult.shareA);
-    } catch (error) {
-      Alert.alert('Tap to Pay failed', error instanceof Error ? error.message : 'Unable to read NFC card.');
-    }
-  }, [amount, loading, password, recipient, tapToPayEnabled]);
-
-  useFocusEffect(
-    useCallback(() => {
-      let active = true;
-
-      nfcService.startReaderMode((tag) => {
-        if (!active) {
-          return;
-        }
-
-        onTapTagWhileFocused(tag).catch(() => undefined);
-      }).catch(() => undefined);
-
-      return () => {
-        active = false;
-        nfcService.stopReaderMode().catch(() => undefined);
-      };
-    }, [onTapTagWhileFocused]),
-  );
+    setShowConfirmModal(true);
+  };
 
   return (
     <KeyboardAvoidingView
@@ -194,35 +162,58 @@ export const PayScreen: React.FC = () => {
           keyboardType="decimal-pad"
         />
 
-        <SectionLabel label="Authorization" />
+        <SectionLabel label="Checkout" />
         <GlassCard>
-          <TextInput
-            style={[styles.input, styles.inputInCard]}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Wallet password"
-            placeholderTextColor={theme.colors.textSecondary}
-            secureTextEntry
-            autoCapitalize="none"
-          />
           <Text style={styles.authHint}>
-            📳  Tap your card anytime on this screen to auto-pay when form is complete.
+            Review payment first, then confirm with password in a secure popup.
           </Text>
-          <Pressable onPress={() => setTapToPayEnabled((v) => !v)} style={styles.toggleTapRow}>
-            <View style={[styles.toggleDot, tapToPayEnabled && styles.toggleDotOn]} />
-            <Text style={styles.toggleTapText}>
-              Tap-to-pay listener {tapToPayEnabled ? 'ON' : 'OFF'}
-            </Text>
-          </Pressable>
         </GlassCard>
 
         <PrimaryButton
-          title="Confirm & Broadcast"
-          onPress={submit}
+          title="Review & Confirm"
+          onPress={() => openConfirmation()}
           loading={loading}
           disabled={!canSubmit}
         />
       </ScrollView>
+
+      <Modal transparent animationType="fade" visible={showConfirmModal}>
+        <View style={styles.nfcOverlay}>
+          <View style={styles.confirmBox}>
+            <Text style={styles.confirmTitle}>Confirm Transaction</Text>
+            <Text style={styles.confirmLine}>Asset: {asset}</Text>
+            <Text style={styles.confirmLine}>Amount: {amount.trim() || '0'}</Text>
+            <Text style={styles.confirmLine} numberOfLines={1}>To: {recipient.trim() || '—'}</Text>
+            <Text style={styles.confirmHint}>
+              Enter your wallet password to sign and broadcast this payment.
+            </Text>
+
+            <TextInput
+              style={[styles.input, styles.confirmInput]}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Wallet password"
+              placeholderTextColor={theme.colors.textSecondary}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <View style={styles.confirmActions}>
+              <PrimaryButton
+                title="Cancel"
+                onPress={() => {
+                  setShowConfirmModal(false);
+                }}
+              />
+              <PrimaryButton
+                title="Sign & Send"
+                onPress={() => submit()}
+                loading={loading}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 };
@@ -257,6 +248,39 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     lineHeight: 20,
+  },
+  confirmBox: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    padding: 20,
+    width: '88%',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  confirmTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 12,
+  },
+  confirmLine: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    marginBottom: 4,
+  },
+  confirmHint: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    marginTop: 8,
+    marginBottom: 10,
+    lineHeight: 17,
+  },
+  confirmInput: {
+    marginBottom: 10,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    gap: 10,
   },
   assetGrid: {
     flexDirection: 'row',
@@ -293,29 +317,5 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.sm,
     fontSize: 15,
   },
-  inputInCard: { marginBottom: theme.spacing.sm },
   authHint: { color: theme.colors.textSecondary, fontSize: 13, lineHeight: 18 },
-  toggleTapRow: {
-    marginTop: theme.spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  toggleDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: 'transparent',
-  },
-  toggleDotOn: {
-    backgroundColor: theme.colors.accent,
-    borderColor: theme.colors.accent,
-  },
-  toggleTapText: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
 });

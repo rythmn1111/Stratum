@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { WalletScreen } from '../screens/WalletScreen';
 import { PayScreen } from '../screens/PayScreen';
@@ -11,9 +11,16 @@ import { theme } from '../constants/theme';
 export type RootTabParamList = {
   Wallet: undefined;
   Pay: undefined;
-  Receive: undefined;
+  Receive: {
+    autoOpenPos?: boolean;
+    shareABase64?: string;
+    payerUserId?: string | null;
+    posToken?: string | null;
+  } | undefined;
   Settings: undefined;
 };
+
+export const rootNavigationRef = createNavigationContainerRef<RootTabParamList>();
 
 const Tab = createBottomTabNavigator<RootTabParamList>();
 
@@ -31,7 +38,7 @@ const walletTheme = {
 
 export const RootNavigation: React.FC = () => {
   return (
-    <NavigationContainer theme={walletTheme}>
+    <NavigationContainer ref={rootNavigationRef} theme={walletTheme}>
       <Tab.Navigator
         screenOptions={({ route }) => ({
           headerShown: false,

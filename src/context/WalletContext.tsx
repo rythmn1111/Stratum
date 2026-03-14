@@ -121,6 +121,7 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       await secureStorage.saveSessionToken(register.sessionToken);
       await secureStorage.saveDeviceFingerprint(deviceFingerprint);
       await secureStorage.savePosToken(register.posToken);
+      await secureStorage.saveLocalShareA(Buffer.from(shareA).toString('base64'));
       await secureStorage.saveWalletProfile({
         userId: register.userId,
         addresses: {
@@ -157,11 +158,18 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       let encryptedBlob: Uint8Array | null = null;
 
       try {
-        if (!preloadedShareA) {
-          setIsNfcScanning(true);
+        if (preloadedShareA) {
+          shareA = Uint8Array.from(preloadedShareA);
+        } else {
+          const localShareABase64 = await secureStorage.getLocalShareA();
+          if (localShareABase64) {
+            shareA = Uint8Array.from(Buffer.from(localShareABase64, 'base64'));
+          } else {
+            setIsNfcScanning(true);
+            // Fallback for legacy wallets that do not have local Share A persisted yet.
+            shareA = await nfcService.readShareFromCard();
+          }
         }
-        // NFC errors are operational — re-throw directly (not security-sensitive).
-        shareA = preloadedShareA ? Uint8Array.from(preloadedShareA) : await nfcService.readShareFromCard();
 
         const deviceFingerprint = await secureStorage.getDeviceFingerprint();
         const sessionToken = await secureStorage.getSessionToken();

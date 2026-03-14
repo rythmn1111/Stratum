@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Buffer } from 'buffer';
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -10,7 +12,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { RouteProp, useRoute } from '@react-navigation/native';
 import QRCode from 'react-native-qrcode-svg';
 import { GlassCard } from '../components/GlassCard';
 import { PrimaryButton } from '../components/PrimaryButton';
@@ -18,6 +20,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { SectionLabel } from '../components/SectionLabel';
 import { theme } from '../constants/theme';
 import { useWallet } from '../context/WalletContext';
+import { RootTabParamList } from '../navigation/RootNavigation';
 import { nfcService } from '../services/nfcService';
 import { truncateAddress } from '../utils/format';
 import { ChainAsset } from '../types';
@@ -30,6 +33,7 @@ const ASSETS: ChainAsset[] = ['ETH', 'SOL', 'USDC_ETH', 'USDC_SOL'];
 
 export const ReceiveScreen: React.FC = () => {
   const { addresses, receiveAmount, setReceiveAmount, sendPaymentInPosMode } = useWallet();
+  const route = useRoute<RouteProp<RootTabParamList, 'Receive'>>();
 
   const [mode, setMode] = useState<ReceiveMode>('receive');
   const [asset, setAsset] = useState<ChainAsset>('ETH');
@@ -42,7 +46,7 @@ export const ReceiveScreen: React.FC = () => {
   const [posTokenManual, setPosTokenManual] = useState('');
   const [isNfcReading, setIsNfcReading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [autoReaderEnabled, setAutoReaderEnabled] = useState(true);
+  const [showPosConfirmModal, setShowPosConfirmModal] = useState(false);
 
   const receiveAddress = useMemo(
     () => (asset.includes('SOL') || asset === 'SOL' ? addresses?.sol ?? '' : addresses?.eth ?? ''),
@@ -83,11 +87,6 @@ export const ReceiveScreen: React.FC = () => {
       return;
     }
 
-    if (!payerPassword.trim()) {
-      Alert.alert('Password required', 'Enter payer password to decrypt and sign.');
-      return;
-    }
-
     if (!isPositiveAmount(receiveAmount || '0')) {
       Alert.alert('Invalid amount', 'Amount must be greater than zero.');
       return;
@@ -102,6 +101,26 @@ export const ReceiveScreen: React.FC = () => {
       return;
     }
 
+    setShowPosConfirmModal(true);
+  };
+
+  const confirmPosPayment = async () => {
+    if (!posShareA) {
+      Alert.alert('Card required', 'Tap payer NFC card first to load authorization share.');
+      return;
+    }
+
+    if (!payerPassword.trim()) {
+      Alert.alert('Password required', 'Enter payer password to decrypt and sign.');
+      return;
+    }
+
+    const resolvedPosToken = posTokenAutoResolved ? posToken : posTokenManual.trim();
+    if (!resolvedPosToken || !payerUserId.trim() || !receiveAddress) {
+      Alert.alert('Missing details', 'Please verify payer details and POS token before confirming.');
+      return;
+    }
+
     setLoading(true);
     try {
       const tx = await sendPaymentInPosMode(
@@ -112,6 +131,7 @@ export const ReceiveScreen: React.FC = () => {
         resolvedPosToken,
       );
       Alert.alert('Payment confirmed', `Transaction ${tx.txHash ?? 'submitted'} confirmed.`);
+      setShowPosConfirmModal(false);
       setPayerPassword('');
       setPayerUserId('');
       setPayerUserIdAutoResolved(false);
@@ -167,60 +187,32 @@ export const ReceiveScreen: React.FC = () => {
     }
   };
 
-  useFocusEffect(
-    React.useCallback(() => {
-      if (mode !== 'pos' || !autoReaderEnabled) {
-        return () => undefined;
-      }
+  useEffect(() => {
+    const params = route.params;
+    if (!params?.autoOpenPos || !params.shareABase64) {
+      return;
+    }
 
-      let active = true;
+    const shareFromRoute = Uint8Array.from(Buffer.from(params.shareABase64, 'base64'));
+    if (posShareA) {
+      wipeUint8(posShareA);
+    }
 
-      nfcService.startReaderMode((tag) => {
-        if (!active || isNfcReading || loading) {
-          return;
-        }
+    setMode('pos');
+    setPosShareA(shareFromRoute);
 
-        setIsNfcReading(true);
-        nfcService.readCardDataFromTag(tag)
-          .then((readResult) => {
-            if (!active) {
-              return;
-            }
+    if (params.payerUserId) {
+      setPayerUserId(params.payerUserId);
+      setPayerUserIdAutoResolved(true);
+    }
 
-            if (posShareA) {
-              wipeUint8(posShareA);
-            }
-            setPosShareA(readResult.shareA);
+    if (params.posToken) {
+      setPosToken(params.posToken);
+      setPosTokenAutoResolved(true);
+    }
 
-            if (readResult.userId) {
-              setPayerUserId(readResult.userId);
-              setPayerUserIdAutoResolved(true);
-            } else {
-              setPayerUserIdAutoResolved(false);
-            }
-
-            if (readResult.posToken) {
-              setPosToken(readResult.posToken);
-              setPosTokenAutoResolved(true);
-            } else {
-              setPosToken(null);
-              setPosTokenAutoResolved(false);
-            }
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            if (active) {
-              setIsNfcReading(false);
-            }
-          });
-      }).catch(() => undefined);
-
-      return () => {
-        active = false;
-        nfcService.stopReaderMode().catch(() => undefined);
-      };
-    }, [autoReaderEnabled, isNfcReading, loading, mode, posShareA]),
-  );
+    Alert.alert('Card detected', 'Card tapped. Enter amount and password to complete payment.');
+  }, [route.params]);
 
   return (
     <KeyboardAvoidingView style={styles.kbv} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -306,10 +298,6 @@ export const ReceiveScreen: React.FC = () => {
               <Text style={styles.posMetaText}>
                 {isNfcReading ? 'Listening for NFC card… keep card near phone.' : posShareA ? 'Payer card loaded. Ready for password.' : 'Tap payer card near phone to auto-load Share A.'}
               </Text>
-              <Pressable onPress={() => setAutoReaderEnabled((v) => !v)} style={styles.toggleTapRow}>
-                <View style={[styles.toggleDot, autoReaderEnabled && styles.toggleDotOn]} />
-                <Text style={styles.toggleTapText}>Auto reader {autoReaderEnabled ? 'ON' : 'OFF'}</Text>
-              </Pressable>
               <PrimaryButton
                 title={posShareA ? 'Rescan Payer Card' : 'Tap Payer Card'}
                 onPress={onReadPayerCard}
@@ -375,19 +363,43 @@ export const ReceiveScreen: React.FC = () => {
 
               <TextInput
                 style={[styles.input, styles.inputLast]}
-                value={payerPassword}
-                onChangeText={setPayerPassword}
-                placeholder="Payer password"
+                value={payerPassword ? '********' : ''}
+                editable={false}
+                placeholder="Password will be entered in confirmation popup"
                 placeholderTextColor={theme.colors.textSecondary}
-                secureTextEntry
-                autoCapitalize="none"
               />
             </GlassCard>
 
-            <PrimaryButton title="Process Payment" onPress={onProcessPosPayment} loading={loading} />
+            <PrimaryButton title="Review & Confirm" onPress={onProcessPosPayment} loading={loading} />
           </>
         )}
       </ScrollView>
+
+      <Modal transparent animationType="fade" visible={showPosConfirmModal}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Confirm POS Payment</Text>
+            <Text style={styles.modalLine}>Asset: {asset}</Text>
+            <Text style={styles.modalLine}>Amount: {receiveAmount.trim() || '0'}</Text>
+            <Text style={styles.modalLine} numberOfLines={1}>Payer ID: {payerUserId.trim() || '—'}</Text>
+
+            <TextInput
+              style={styles.input}
+              value={payerPassword}
+              onChangeText={setPayerPassword}
+              placeholder="Payer password"
+              placeholderTextColor={theme.colors.textSecondary}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <View style={styles.modalActions}>
+              <PrimaryButton title="Cancel" onPress={() => setShowPosConfirmModal(false)} />
+              <PrimaryButton title="Sign & Process" onPress={confirmPosPayment} loading={loading} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 };
@@ -507,28 +519,34 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  toggleTapRow: {
-    marginBottom: theme.spacing.sm,
-    flexDirection: 'row',
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
   },
-  toggleDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+  modalBox: {
+    backgroundColor: theme.colors.surface,
+    width: '88%',
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    backgroundColor: 'transparent',
+    padding: 20,
   },
-  toggleDotOn: {
-    backgroundColor: theme.colors.accent,
-    borderColor: theme.colors.accent,
+  modalTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 10,
   },
-  toggleTapText: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
+  modalLine: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    marginBottom: 4,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
   },
   inputInCard: { marginBottom: theme.spacing.sm },
   inputLast: { marginBottom: 0 },

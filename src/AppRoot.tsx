@@ -1,14 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { SafeAreaView, StatusBar, StyleSheet, Text } from 'react-native';
 import { WalletProvider, useWallet } from './context/WalletContext';
 import { RootNavigation } from './navigation/RootNavigation';
 import { OnboardingScreen } from './screens/OnboardingScreen';
 import { theme } from './constants/theme';
+import { nfcService } from './services/nfcService';
+import { rootNavigationRef } from './navigation/RootNavigation';
+import { Buffer } from 'buffer';
 
 const AppShell: React.FC = () => {
   const { isSetupComplete, initializeNfc, hydrateWallet } = useWallet();
   const [nfcError, setNfcError] = useState<string | null>(null);
   const [booting, setBooting] = useState(true);
+  const lastTapAtRef = useRef(0);
 
   useEffect(() => {
     let mounted = true;
@@ -39,6 +43,50 @@ const AppShell: React.FC = () => {
       setNfcError(error instanceof Error ? error.message : 'Unable to initialize NFC.');
     });
   }, [initializeNfc]);
+
+  useEffect(() => {
+    if (!isSetupComplete) {
+      return () => undefined;
+    }
+
+    let active = true;
+
+    nfcService.startReaderMode((tag) => {
+      if (!active) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastTapAtRef.current < 1200) {
+        return;
+      }
+      lastTapAtRef.current = now;
+
+      nfcService.readCardDataFromTag(tag)
+        .then((card) => {
+          if (!active) {
+            return;
+          }
+
+          if (!rootNavigationRef.isReady()) {
+            return;
+          }
+
+          rootNavigationRef.navigate('Receive', {
+            autoOpenPos: true,
+            shareABase64: Buffer.from(card.shareA).toString('base64'),
+            payerUserId: card.userId,
+            posToken: card.posToken,
+          });
+        })
+        .catch(() => undefined);
+    }).catch(() => undefined);
+
+    return () => {
+      active = false;
+      nfcService.stopReaderMode().catch(() => undefined);
+    };
+  }, [isSetupComplete]);
 
   return (
     <SafeAreaView style={styles.root}>

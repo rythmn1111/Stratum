@@ -6,6 +6,7 @@ const SESSION_ACCOUNT = 'session-token';
 const DEVICE_ACCOUNT = 'device-fingerprint';
 const PROFILE_ACCOUNT = 'wallet-profile';
 const POS_TOKEN_ACCOUNT = 'pos-token';
+const LOCAL_SHARE_ACCOUNT = 'local-share-a';
 
 interface WalletProfile {
   userId: string;
@@ -57,7 +58,25 @@ export const secureStorage = {
       Keychain.resetGenericPassword({ service: `${SERVICE}-device` }),
       Keychain.resetGenericPassword({ service: `${SERVICE}-profile` }),
       Keychain.resetGenericPassword({ service: `${SERVICE}-pos-token` }),
+      Keychain.resetGenericPassword({ service: `${SERVICE}-local-share` }),
     ]);
+  },
+
+  async saveLocalShareA(shareABase64: string): Promise<void> {
+    await Keychain.setGenericPassword(LOCAL_SHARE_ACCOUNT, shareABase64, {
+      service: `${SERVICE}-local-share`,
+      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+  },
+
+  async getLocalShareA(): Promise<string | null> {
+    const creds = await Keychain.getGenericPassword({
+      service: `${SERVICE}-local-share`,
+    });
+    if (!creds) {
+      return null;
+    }
+    return creds.password;
   },
 
   async savePosToken(token: string): Promise<void> {
