@@ -1,5 +1,5 @@
 export const CONFIG = {
-  apiBaseUrl: 'http://192.168.81.27:4000',
+  apiBaseUrl: 'http://62.146.173.162:4000',
   ethRpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
   ethNetworkLabel: 'Ethereum Sepolia',
   ethPosHubAddress: '',
