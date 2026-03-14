@@ -95,12 +95,16 @@ export const WalletProvider: React.FC<React.PropsWithChildren> = ({ children }) 
       shareA = split.shareA;
       shareB = split.shareB;
 
-      await nfcService.writeShareToCard(shareA);
-
       const deviceFingerprint = await createDeviceFingerprint();
       const register = await backendApi.registerUser({
         deviceFingerprint,
         shareB: Buffer.from(shareB).toString('base64'),
+      });
+
+      await nfcService.writeShareToCard(shareA, {
+        metadata: {
+          userId: register.userId,
+        },
       });
 
       await secureStorage.saveSessionToken(register.sessionToken);

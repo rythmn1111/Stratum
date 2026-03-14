@@ -3,10 +3,35 @@ import { Buffer } from 'buffer';
 import { Platform } from 'react-native';
 
 const WALLET_RECORD_TYPE = 'sw:1';
+const WALLET_META_RECORD_TYPE = 'sw:meta:1';
 const LEGACY_WALLET_RECORD_TYPE = 'application/vnd.nfc-split-wallet.share';
 const DEMO_EXTERNAL_RECORD_TYPE = 'nfcwallet.app:keydata';
 const WALLET_RECORD_TNF = Ndef.TNF_EXTERNAL_TYPE;
 let initialized = false;
+
+interface CardMetadata {
+  userId?: string;
+  version: number;
+}
+
+export interface ReadCardResult {
+  shareA: Uint8Array;
+  userId: string | null;
+}
+
+export interface NfcDiagnosticsResult {
+  supported: boolean;
+  enabled: boolean;
+  initialized: boolean;
+  platform: string;
+}
+
+export interface WriteShareOptions {
+  tagPassword?: string;
+  metadata?: {
+    userId?: string;
+  };
+}
 
 const buildPayload = (bytes: Uint8Array): number[] => {
   return Array.from(bytes);
@@ -50,6 +75,23 @@ const parseLegacyJsonShare = (rawText: string): Uint8Array | null => {
   }
 };
 
+const parseCardMetadata = (rawText: string): CardMetadata | null => {
+  try {
+    const parsed = JSON.parse(rawText) as CardMetadata;
+    if (typeof parsed?.version !== 'number') {
+      return null;
+    }
+
+    if (parsed.userId && typeof parsed.userId !== 'string') {
+      return null;
+    }
+
+    return parsed;
+  } catch (_err) {
+    return null;
+  }
+};
+
 const ensureInit = async (): Promise<void> => {
   if (initialized) {
     return;
@@ -74,12 +116,27 @@ export const nfcService = {
     await ensureInit();
   },
 
-  async writeShareToCard(shareA: Uint8Array, tagPassword?: string): Promise<void> {
+  async writeShareToCard(shareA: Uint8Array, options?: string | WriteShareOptions): Promise<void> {
     await ensureInit();
+
+    const normalizedOptions: WriteShareOptions = typeof options === 'string'
+      ? { tagPassword: options }
+      : (options ?? {});
 
     const records = [
       Ndef.record(WALLET_RECORD_TNF, WALLET_RECORD_TYPE, [], buildPayload(shareA)),
     ];
+
+    if (normalizedOptions.metadata) {
+      const metaPayload = Buffer.from(JSON.stringify({
+        version: 1,
+        userId: normalizedOptions.metadata.userId,
+      })).toJSON().data;
+
+      records.push(
+        Ndef.record(WALLET_RECORD_TNF, WALLET_META_RECORD_TYPE, [], metaPayload),
+      );
+    }
 
     const bytes = Ndef.encodeMessage(records);
     if (!bytes) {
@@ -102,7 +159,7 @@ export const nfcService = {
       }
 
       // Some enterprise tags allow additional password operations through vendor-specific commands.
-      if (tagPassword) {
+      if (normalizedOptions.tagPassword) {
         // Placeholder: implement card-vendor specific APDU auth flow here when tag model is finalized.
       }
 
@@ -141,6 +198,11 @@ export const nfcService = {
   },
 
   async readShareFromCard(): Promise<Uint8Array> {
+    const data = await this.readCardDataFromCard();
+    return data.shareA;
+  },
+
+  async readCardDataFromCard(): Promise<ReadCardResult> {
     await ensureInit();
 
     try {
@@ -152,7 +214,7 @@ export const nfcService = {
         throw new Error('No wallet share found on this NFC card.');
       }
 
-      const record = ndefMessage.find((item) => {
+      const shareRecord = ndefMessage.find((item) => {
         try {
           const decodedType = Ndef.util.bytesToString(item.type);
           return (
@@ -165,23 +227,45 @@ export const nfcService = {
         }
       });
 
-      if (record?.payload) {
+      const metadataRecord = ndefMessage.find((item) => {
+        try {
+          const decodedType = Ndef.util.bytesToString(item.type);
+          return decodedType === WALLET_META_RECORD_TYPE;
+        } catch (_err) {
+          return false;
+        }
+      });
+
+      let resolvedUserId: string | null = null;
+      if (metadataRecord?.payload) {
+        const metaJson = Buffer.from(metadataRecord.payload).toString('utf8');
+        const metadata = parseCardMetadata(metaJson);
+        resolvedUserId = metadata?.userId ?? null;
+      }
+
+      if (shareRecord?.payload) {
         const decodedType = (() => {
           try {
-            return Ndef.util.bytesToString(record.type);
+            return Ndef.util.bytesToString(shareRecord.type);
           } catch (_err) {
             return '';
           }
         })();
 
         if (decodedType === WALLET_RECORD_TYPE || decodedType === LEGACY_WALLET_RECORD_TYPE) {
-          return Uint8Array.from(record.payload);
+          return {
+            shareA: Uint8Array.from(shareRecord.payload),
+            userId: resolvedUserId,
+          };
         }
 
-        const externalJson = Buffer.from(record.payload).toString('utf8');
+        const externalJson = Buffer.from(shareRecord.payload).toString('utf8');
         const parsedExternal = parseLegacyJsonShare(externalJson);
         if (parsedExternal) {
-          return parsedExternal;
+          return {
+            shareA: parsedExternal,
+            userId: resolvedUserId,
+          };
         }
       }
 
@@ -190,7 +274,10 @@ export const nfcService = {
         const textPayload = decodeNdefTextPayload(item.payload);
         const parsed = parseLegacyJsonShare(textPayload);
         if (parsed) {
-          return parsed;
+          return {
+            shareA: parsed,
+            userId: resolvedUserId,
+          };
         }
       }
 
@@ -206,6 +293,39 @@ export const nfcService = {
     } finally {
       await NfcManager.cancelTechnologyRequest();
     }
+  },
+
+  async getDiagnostics(): Promise<NfcDiagnosticsResult> {
+    const supported = await NfcManager.isSupported();
+    if (!supported) {
+      return {
+        supported,
+        enabled: false,
+        initialized,
+        platform: Platform.OS,
+      };
+    }
+
+    const enabled = await NfcManager.isEnabled();
+    if (enabled && !initialized) {
+      await NfcManager.start();
+      initialized = true;
+    }
+
+    return {
+      supported,
+      enabled,
+      initialized,
+      platform: Platform.OS,
+    };
+  },
+
+  async openNfcSettings(): Promise<void> {
+    if (Platform.OS !== 'android') {
+      throw new Error('Open NFC settings manually from iOS system settings.');
+    }
+
+    await NfcManager.goToNfcSetting();
   },
 
   async startReaderMode(onDiscovered: () => void): Promise<void> {

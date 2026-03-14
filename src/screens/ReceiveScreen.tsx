@@ -33,6 +33,7 @@ export const ReceiveScreen: React.FC = () => {
   const [mode, setMode] = useState<ReceiveMode>('receive');
   const [asset, setAsset] = useState<ChainAsset>('ETH');
   const [payerUserId, setPayerUserId] = useState('');
+  const [payerUserIdAutoResolved, setPayerUserIdAutoResolved] = useState(false);
   const [payerPassword, setPayerPassword] = useState('');
   const [posShareA, setPosShareA] = useState<Uint8Array | null>(null);
   const [isNfcReading, setIsNfcReading] = useState(false);
@@ -47,6 +48,8 @@ export const ReceiveScreen: React.FC = () => {
     if (mode !== 'pos' && posShareA) {
       wipeUint8(posShareA);
       setPosShareA(null);
+      setPayerUserId('');
+      setPayerUserIdAutoResolved(false);
     }
   }, [mode, posShareA]);
 
@@ -92,6 +95,7 @@ export const ReceiveScreen: React.FC = () => {
       Alert.alert('Payment confirmed', `Transaction ${tx.txHash ?? 'submitted'} confirmed.`);
       setPayerPassword('');
       setPayerUserId('');
+      setPayerUserIdAutoResolved(false);
       wipeUint8(posShareA);
       setPosShareA(null);
     } catch (error) {
@@ -104,12 +108,20 @@ export const ReceiveScreen: React.FC = () => {
   const onReadPayerCard = async () => {
     setIsNfcReading(true);
     try {
-      const readShare = await nfcService.readShareFromCard();
+      const readResult = await nfcService.readCardDataFromCard();
       if (posShareA) {
         wipeUint8(posShareA);
       }
-      setPosShareA(readShare);
-      Alert.alert('Card detected', 'Payer card share loaded. Enter payer credentials to continue.');
+      setPosShareA(readResult.shareA);
+
+      if (readResult.userId) {
+        setPayerUserId(readResult.userId);
+        setPayerUserIdAutoResolved(true);
+        Alert.alert('Card detected', 'Payer card loaded. User ID resolved from card metadata.');
+      } else {
+        setPayerUserIdAutoResolved(false);
+        Alert.alert('Card detected', 'Payer card loaded. Enter payer user ID for this legacy card.');
+      }
     } catch (error) {
       Alert.alert('NFC read failed', error instanceof Error ? error.message : 'Unable to read payer card.');
     } finally {
@@ -220,14 +232,25 @@ export const ReceiveScreen: React.FC = () => {
 
             <SectionLabel label="Payer Details" />
             <GlassCard>
+              <Text style={styles.posMetaText}>
+                {payerUserIdAutoResolved
+                  ? 'Payer identity was auto-resolved from NFC card metadata.'
+                  : 'Legacy cards may not carry payer identity metadata. Enter payer user ID manually.'}
+              </Text>
               <TextInput
                 style={[styles.input, styles.inputInCard]}
                 value={payerUserId}
-                onChangeText={setPayerUserId}
+                onChangeText={(text) => {
+                  setPayerUserId(text);
+                  if (text !== payerUserId) {
+                    setPayerUserIdAutoResolved(false);
+                  }
+                }}
                 placeholder="Payer user ID"
                 placeholderTextColor={theme.colors.textSecondary}
                 autoCapitalize="none"
                 autoCorrect={false}
+                editable={!payerUserIdAutoResolved}
               />
               <TextInput
                 style={[styles.input, styles.inputLast]}

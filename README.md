@@ -26,8 +26,10 @@ Configured in src/config.ts.
 - NFC write/read for card share
 - Pay flow (ETH, SOL, USDC on Ethereum)
 - Receive/POS screen with QR and POS mode
+- POS NFC flow auto-resolves payer userId from card metadata on newly issued cards
 - Wallet screen with network-labeled balances and addresses
 - Bottom-tab app navigation with custom icons
+- Settings screen NFC diagnostics (support/enabled/init checks + probe card read)
 
 ### Security flow
 
@@ -236,6 +238,24 @@ Response:
 - Small cards can fail with capacity limits.
 - App now uses compact payload + compact record type to reduce size.
 - Recommended tags: NTAG215 or NTAG216 for reliable capacity headroom.
+- Android write supports NDEF-formatable fallback for unformatted tags.
+- New cards also include a metadata record with payer userId for POS auto-resolution.
+- Legacy cards without metadata still work, but POS may require manual payer userId entry.
+
+## NFC QA Checklist
+
+Use this checklist before release:
+
+1. Confirm app startup NFC diagnostics show supported = yes and enabled = yes.
+2. Run setup on a fresh tag and verify write succeeds first try.
+3. Probe the newly written card in Settings and verify share bytes > 0 and payer userId is present.
+4. Verify POS mode auto-fills payer identity after scanning a new card.
+5. Verify legacy card scan still works and manual payer userId fallback is available.
+6. Verify Android unformatted tag path writes successfully using formatable fallback.
+7. Verify wrong password path returns generic authentication error without leak details.
+8. Verify network outage during share fetch shows clear error and retry behavior.
+9. Verify pay flow for ETH, SOL, USDC on Ethereum, and USDC on Solana on real devices.
+10. Verify key material is cleared after signing by following debug logs and memory wipe hooks.
 
 ## Chain Configuration Details
 
@@ -250,7 +270,7 @@ Wallet screen labels balances by chain/network so users can see Ethereum vs Sola
 
 ## Known Limitations
 
-- POS payer identity still requires payer userId input on merchant device (identity exchange UX to be improved).
+- Legacy cards that were written before metadata support may still require manual payer userId entry in POS mode.
 - Recovery and key rotation flows are placeholder-level.
 - Demo backend in-memory mode is not persistent.
 - Public RPC endpoints may rate-limit under heavy usage.
