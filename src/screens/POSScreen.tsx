@@ -1,117 +1,108 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  Animated,
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import Feather from 'react-native-vector-icons/Feather';
 import QRCode from 'react-native-qrcode-svg';
-import { Buffer } from 'buffer';
-import { GlassCard } from '../components/GlassCard';
-import { PrimaryButton } from '../components/PrimaryButton';
-import { ScreenHeader } from '../components/ScreenHeader';
-import { SectionLabel } from '../components/SectionLabel';
-import { theme } from '../constants/theme';
+import Svg, { Circle, Path } from 'react-native-svg';
+import { AddressChip } from '../components/ui/AddressChip';
+import { GradientCard } from '../components/ui/GradientCard';
+import { NFCRingAnimation } from '../components/ui/NFCRingAnimation';
+import { OrangeButton } from '../components/ui/OrangeButton';
+import { PinDot } from '../components/ui/PinDot';
+import { TransactionRow } from '../components/ui/TransactionRow';
 import { useWallet } from '../context/WalletContext';
-import {
-  createPaymentRequest,
-  encodeRequestToNFC,
-  encodeRequestToQR,
-  PaymentChain,
-} from '../modules/pos/paymentRequest';
 import { nfcService } from '../services/nfcService';
-import { ChainAsset } from '../types';
-import { wipeUint8 } from '../utils/memory';
+import { Colors, Radius, Spacing } from '../theme/colors';
+import { Typography } from '../theme/typography';
+import { ChainAsset, TransactionPreview } from '../types';
+import { isPositiveAmount } from '../utils/validation';
 
 type PosTab = 'qr' | 'nfc';
 
 const ASSETS: ChainAsset[] = ['ETH', 'SOL', 'USDC_ETH', 'USDC_SOL'];
-
-const ASSET_TO_PAYMENT_CHAIN: Record<ChainAsset, PaymentChain> = {
-  ETH: 'ETH',
-  SOL: 'SOL',
-  USDC_ETH: 'USDC_ETH',
-  USDC_SOL: 'USDC_SOL',
-};
-
-const ASSET_LABEL: Record<ChainAsset, string> = {
+const LABELS: Record<ChainAsset, string> = {
   ETH: 'ETH',
   SOL: 'SOL',
   USDC_ETH: 'USDC (ETH)',
   USDC_SOL: 'USDC (SOL)',
 };
+const PRICES: Record<ChainAsset, number> = {
+  ETH: 2501.61,
+  SOL: 52,
+  USDC_ETH: 1,
+  USDC_SOL: 1,
+};
+const PROGRESS_STEPS = ['Fetching secure share', 'Reconstructing key', 'Signing transaction', 'Broadcasting'];
+const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'DEL'] as const;
 
-const KEYS: ReadonlyArray<string> = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'DEL'];
-
-const normalizeAmount = (raw: string): string => {
-  if (!raw) {
+const normalizeAmount = (value: string) => {
+  if (!value) {
     return '';
   }
 
-  if (raw.startsWith('.')) {
-    return `0${raw}`;
+  if (value.startsWith('.')) {
+    return `0${value}`;
   }
 
-  return raw;
+  return value;
 };
 
-const amountFromKeypad = (current: string, key: string): string => {
+const nextAmount = (current: string, key: string) => {
   if (key === 'DEL') {
     return current.slice(0, -1);
   }
 
   if (key === '.') {
-    if (!current) {
-      return '0.';
-    }
     if (current.includes('.')) {
       return current;
     }
-    return `${current}.`;
-  }
-
-  if (current === '0' && key === '0') {
-    return current;
+    return current ? `${current}.` : '0.';
   }
 
   const next = `${current}${key}`;
+  const [, decimals = ''] = next.split('.');
 
-  const [whole = '', decimals = ''] = next.split('.');
   if (decimals.length > 6) {
     return current;
   }
 
-  if (whole.length > 1 && whole.startsWith('0') && !next.includes('.')) {
-    return String(Number.parseInt(whole, 10));
+  if (next.length > 1 && next.startsWith('0') && !next.includes('.')) {
+    return String(Number(next));
   }
 
   return next;
 };
 
 export const POSScreen: React.FC = () => {
-  const { addresses, sendPaymentInPosMode } = useWallet();
-
+  const { addresses, recentTransactions, sendPaymentInPosMode } = useWallet();
   const [tab, setTab] = useState<PosTab>('qr');
   const [asset, setAsset] = useState<ChainAsset>('ETH');
   const [amount, setAmount] = useState('');
-
-  const [isListening, setIsListening] = useState(false);
-  const [scanStatus, setScanStatus] = useState('Waiting for card tap');
-
+  const [scanState, setScanState] = useState<'idle' | 'scanning' | 'success' | 'error'>('idle');
+  const [scanStatus, setScanStatus] = useState('NFC Inactive');
   const [shareA, setShareA] = useState<Uint8Array | null>(null);
   const [payerUserId, setPayerUserId] = useState('');
   const [posToken, setPosToken] = useState('');
-
   const [customerPassword, setCustomerPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-
-  const nfcShareBufferRef = useRef<Buffer | null>(null);
+  const [showSheet, setShowSheet] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [progressIndex, setProgressIndex] = useState(-1);
+  const [receivedTx, setReceivedTx] = useState<TransactionPreview | null>(null);
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(20)).current;
 
   const merchantAddress = useMemo(() => {
     if (!addresses) {
@@ -121,487 +112,646 @@ export const POSScreen: React.FC = () => {
     return asset === 'SOL' || asset === 'USDC_SOL' ? addresses.sol : addresses.eth;
   }, [addresses, asset]);
 
-  const amountDisplay = useMemo(() => {
-    const normalized = normalizeAmount(amount);
-    return normalized || '0';
-  }, [amount]);
+  const amountValue = useMemo(() => normalizeAmount(amount) || '0.00', [amount]);
+  const usdValue = useMemo(
+    () => (isPositiveAmount(amountValue) ? parseFloat(amountValue) * PRICES[asset] : 0),
+    [amountValue, asset],
+  );
+  const recentPayments = useMemo(
+    () => recentTransactions.filter((tx) => tx.to === merchantAddress).slice(0, 3),
+    [merchantAddress, recentTransactions],
+  );
 
-  const qrPayload = useMemo(() => {
-    if (!merchantAddress || !amount) {
-      return '';
-    }
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, { duration: 300, toValue: 1, useNativeDriver: true }),
+      Animated.timing(translateY, { duration: 300, toValue: 0, useNativeDriver: true }),
+    ]).start();
+  }, [opacity, translateY]);
 
-    try {
-      const req = createPaymentRequest(
-        merchantAddress,
-        ASSET_TO_PAYMENT_CHAIN[asset],
-        normalizeAmount(amount),
-      );
-      return encodeRequestToQR(req);
-    } catch (_error) {
-      return '';
-    }
-  }, [amount, asset, merchantAddress]);
-
-  const nfcPayloadPreview = useMemo(() => {
-    if (!merchantAddress || !amount) {
-      return '';
-    }
-
-    try {
-      const req = createPaymentRequest(
-        merchantAddress,
-        ASSET_TO_PAYMENT_CHAIN[asset],
-        normalizeAmount(amount),
-      );
-      return encodeRequestToNFC(req).toString('utf8');
-    } catch (_error) {
-      return '';
-    }
-  }, [amount, asset, merchantAddress]);
-
-  const cleanupShare = useCallback(() => {
-    if (nfcShareBufferRef.current) {
-      nfcShareBufferRef.current.fill(0);
-      nfcShareBufferRef.current = null;
-    }
-
-    if (shareA) {
-      wipeUint8(shareA);
-      setShareA(null);
-    }
-  }, [shareA]);
-
-  const stopNfcListener = useCallback(async () => {
+  const stopReader = useCallback(async () => {
     await nfcService.stopReaderMode().catch(() => undefined);
-    setIsListening(false);
+    setScanState('idle');
+    setScanStatus('NFC Inactive');
   }, []);
 
-  const startNfcListener = useCallback(async () => {
-    if (tab !== 'nfc') {
-      return;
-    }
-
-    setScanStatus('Waiting for card tap');
-    setIsListening(true);
+  const startReader = useCallback(async () => {
+    setScanState('scanning');
+    setScanStatus('NFC Active');
 
     await nfcService.startReaderMode(async (tag) => {
       try {
         const card = await nfcService.readCardDataFromTag(tag);
-
-        cleanupShare();
-
-        const local = Buffer.from(card.shareA);
-        nfcShareBufferRef.current = local;
-        setShareA(Uint8Array.from(local));
-
+        setShareA(card.shareA);
         setPayerUserId(card.userId ?? '');
         setPosToken(card.posToken ?? '');
-        setScanStatus(card.userId && card.posToken ? 'Card loaded' : 'Card loaded. Enter missing fields manually.');
+        setScanState('success');
+        setScanStatus('Card detected');
+        setShowSheet(true);
+        setTimeout(() => setScanState('idle'), 800);
       } catch (error) {
-        setScanStatus(error instanceof Error ? error.message : 'Card parse failed');
+        setScanState('error');
+        setScanStatus(error instanceof Error ? error.message : 'Unable to parse NFC card');
       }
     });
-  }, [cleanupShare, tab]);
+  }, []);
 
   useEffect(() => {
     if (tab !== 'nfc') {
-      stopNfcListener().catch(() => undefined);
+      stopReader().catch(() => undefined);
       return;
     }
 
-    startNfcListener().catch((error) => {
-      setIsListening(false);
-      setScanStatus(error instanceof Error ? error.message : 'Failed to start NFC listener');
+    startReader().catch((error) => {
+      setScanState('error');
+      setScanStatus(error instanceof Error ? error.message : 'Unable to start NFC reader');
     });
 
     return () => {
-      stopNfcListener().catch(() => undefined);
+      stopReader().catch(() => undefined);
     };
-  }, [startNfcListener, stopNfcListener, tab]);
+  }, [startReader, stopReader, tab]);
 
-  useEffect(() => {
-    return () => {
-      stopNfcListener().catch(() => undefined);
-      cleanupShare();
-    };
-  }, [cleanupShare, stopNfcListener]);
-
-  const onKeypadPress = (key: string) => {
-    setAmount((prev) => amountFromKeypad(prev, key));
+  const onKeyPress = (key: string) => {
+    setAmount((current) => nextAmount(current, key));
   };
 
-  const clearTransactionState = useCallback(() => {
+  const onShareAddress = async () => {
+    await Share.share({ message: `Pay ${LABELS[asset]} to ${merchantAddress}` });
+  };
+
+  const resetPaymentState = () => {
     setCustomerPassword('');
-    setShowPassword(false);
-    setShowConfirm(false);
+    setShareA(null);
     setPayerUserId('');
     setPosToken('');
-    cleanupShare();
-  }, [cleanupShare]);
+    setProgressIndex(-1);
+    setProcessing(false);
+  };
 
-  const canOpenConfirm = useMemo(() => {
-    const normalizedAmount = normalizeAmount(amount);
-    return (
-      tab === 'nfc'
-      && !!merchantAddress
-      && !!shareA
-      && !!payerUserId.trim()
-      && !!posToken.trim()
-      && !!normalizedAmount
-      && Number.parseFloat(normalizedAmount) > 0
-    );
-  }, [amount, merchantAddress, payerUserId, posToken, shareA, tab]);
-
-  const restartAfterAttempt = useCallback(async () => {
-    clearTransactionState();
-    if (tab === 'nfc') {
-      await stopNfcListener();
-      await startNfcListener().catch((error) => {
-        setScanStatus(error instanceof Error ? error.message : 'Unable to restart NFC listener');
-      });
-    }
-  }, [clearTransactionState, startNfcListener, stopNfcListener, tab]);
-
-  const onConfirmPayment = async () => {
-    if (!shareA || !merchantAddress) {
-      Alert.alert('Missing card', 'Tap customer card first.');
+  const onProcessPayment = async () => {
+    if (!shareA || !payerUserId.trim() || !posToken.trim()) {
+      Alert.alert('Customer card required', 'Tap the customer card before processing payment.');
       return;
     }
 
-    if (!customerPassword.trim()) {
-      Alert.alert('Password required', 'Enter customer wallet password.');
-      return;
-    }
-
-    const normalizedAmount = normalizeAmount(amount);
-    if (!normalizedAmount || Number.parseFloat(normalizedAmount) <= 0) {
+    if (!isPositiveAmount(amountValue)) {
       Alert.alert('Invalid amount', 'Enter a valid amount greater than zero.');
       return;
     }
 
-    setSubmitting(true);
+    if (!customerPassword.trim()) {
+      Alert.alert('Password required', 'Ask the customer to enter their wallet password.');
+      return;
+    }
+
+    setProcessing(true);
+    setProgressIndex(0);
+    const interval = setInterval(() => {
+      setProgressIndex((value) => (value < PROGRESS_STEPS.length - 1 ? value + 1 : value));
+    }, 850);
+
     try {
       const tx = await sendPaymentInPosMode(
         customerPassword,
         payerUserId.trim(),
-        {
-          recipient: merchantAddress,
-          amount: normalizedAmount,
-          asset,
-        },
+        { amount: amountValue, asset, recipient: merchantAddress },
         shareA,
         posToken.trim(),
       );
 
-      Alert.alert('Payment complete', `Tx hash: ${tx.txHash ?? 'submitted'}`);
-      await restartAfterAttempt();
+      setReceivedTx(tx);
+      setShowSheet(false);
+      resetPaymentState();
     } catch (error) {
-      Alert.alert('Payment failed', error instanceof Error ? error.message : 'Unable to complete payment.');
-      await restartAfterAttempt();
+      Alert.alert('Payment failed', error instanceof Error ? error.message : 'Unable to process payment.');
+      resetPaymentState();
     } finally {
-      setSubmitting(false);
+      clearInterval(interval);
+      setProcessing(false);
     }
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <ScreenHeader title="POS" subtitle="Merchant collection flow" />
+    <SafeAreaView edges={['top']} style={styles.safeArea}>
+      <Animated.View style={[styles.flex, { opacity, transform: [{ translateY }] }]}>
+        <ScrollView
+          contentContainerStyle={styles.container}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.headerRow}>
+            <Text allowFontScaling={false} style={styles.title}>Receive Payment</Text>
+            <AddressChip
+              address={merchantAddress || '0x0000'}
+              chain={asset === 'SOL' || asset === 'USDC_SOL' ? 'SOL' : 'ETH'}
+            />
+          </View>
 
-      <GlassCard>
-        <View style={styles.tabRow}>
-          <Pressable style={[styles.tabButton, tab === 'qr' && styles.tabButtonActive]} onPress={() => setTab('qr')}>
-            <Text style={[styles.tabText, tab === 'qr' && styles.tabTextActive]}>QR</Text>
-          </Pressable>
-          <Pressable style={[styles.tabButton, tab === 'nfc' && styles.tabButtonActive]} onPress={() => setTab('nfc')}>
-            <Text style={[styles.tabText, tab === 'nfc' && styles.tabTextActive]}>NFC</Text>
-          </Pressable>
-        </View>
-      </GlassCard>
-
-      <SectionLabel label="Asset" />
-      <View style={styles.assetRow}>
-        {ASSETS.map((item) => (
-          <Pressable
-            key={item}
-            style={[styles.assetChip, asset === item && styles.assetChipActive]}
-            onPress={() => setAsset(item)}
-          >
-            <Text style={[styles.assetChipText, asset === item && styles.assetChipTextActive]}>{ASSET_LABEL[item]}</Text>
-          </Pressable>
-        ))}
-      </View>
-
-      <SectionLabel label="Amount" />
-      <GlassCard>
-        <Text style={styles.amountDisplay}>{amountDisplay}</Text>
-        <View style={styles.keypadGrid}>
-          {KEYS.map((key) => (
-            <Pressable key={key} style={styles.key} onPress={() => onKeypadPress(key)}>
-              <Text style={styles.keyText}>{key}</Text>
-            </Pressable>
-          ))}
-        </View>
-      </GlassCard>
-
-      {tab === 'qr' && (
-        <GlassCard>
-          <Text style={styles.infoTitle}>Customer Scan</Text>
-          {qrPayload ? (
-            <View style={styles.qrWrap}>
-              <QRCode value={qrPayload} size={180} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chainScroll}>
+            <View style={styles.chainRow}>
+              {ASSETS.map((item) => {
+                const selected = item === asset;
+                return (
+                  <Pressable
+                    key={item}
+                    onPress={() => setAsset(item)}
+                    style={[styles.chainPill, selected && styles.chainPillActive]}
+                  >
+                    <Feather
+                      color={selected ? Colors.offWhite : Colors.textMuted}
+                      name={item === 'SOL' || item === 'USDC_SOL' ? 'triangle' : 'hexagon'}
+                      size={14}
+                    />
+                    <Text allowFontScaling={false} style={[styles.chainText, selected && styles.chainTextActive]}>
+                      {LABELS[item]}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
-          ) : (
-            <Text style={styles.infoBody}>Enter an amount and keep wallet connected to generate QR request.</Text>
-          )}
-          {!!nfcPayloadPreview && (
-            <Text style={styles.previewText} numberOfLines={4}>
-              NFC payload preview: {nfcPayloadPreview}
-            </Text>
-          )}
-        </GlassCard>
-      )}
+          </ScrollView>
 
-      {tab === 'nfc' && (
-        <>
-          <GlassCard>
-            <Text style={styles.infoTitle}>Tap Customer Card</Text>
-            <Text style={styles.infoBody}>{scanStatus}</Text>
-            <Text style={styles.statusChip}>{isListening ? 'Listener active' : 'Listener stopped'}</Text>
-          </GlassCard>
+          <GradientCard style={styles.amountCard}>
+            <Text allowFontScaling={false} style={styles.amountText}>{amountValue}</Text>
+            <Text allowFontScaling={false} style={styles.currencyText}>{LABELS[asset]}</Text>
+            <Text allowFontScaling={false} style={styles.usdText}>${usdValue.toFixed(2)}</Text>
+          </GradientCard>
 
-          <GlassCard>
-            <Text style={styles.infoTitle}>Customer Identity</Text>
-            <TextInput
-              style={styles.input}
-              value={payerUserId}
-              onChangeText={setPayerUserId}
-              placeholder="Customer user ID"
-              placeholderTextColor={theme.colors.textSecondary}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TextInput
-              style={styles.input}
-              value={posToken}
-              onChangeText={setPosToken}
-              placeholder="POS token"
-              placeholderTextColor={theme.colors.textSecondary}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <PrimaryButton
-              title="Continue"
-              onPress={() => setShowConfirm(true)}
-              disabled={!canOpenConfirm}
-            />
-          </GlassCard>
-        </>
-      )}
-
-      <Modal visible={showConfirm} transparent animationType="fade" onRequestClose={() => setShowConfirm(false)}>
-        <View style={styles.modalBackdrop}>
-          <GlassCard>
-            <Text style={styles.modalTitle}>Confirm POS Payment</Text>
-            <Text style={styles.modalLine}>Asset: {ASSET_LABEL[asset]}</Text>
-            <Text style={styles.modalLine}>Amount: {normalizeAmount(amount)}</Text>
-            <Text style={styles.modalLine} numberOfLines={1}>
-              Merchant: {merchantAddress || 'Unavailable'}
-            </Text>
-
-            <SectionLabel label="Customer Password" />
-            <View style={styles.passwordRow}>
-              <TextInput
-                style={[styles.input, styles.passwordInput]}
-                value={customerPassword}
-                onChangeText={setCustomerPassword}
-                placeholder="Enter customer password"
-                placeholderTextColor={theme.colors.textSecondary}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-              />
-              <Pressable style={styles.showHideBtn} onPress={() => setShowPassword((prev) => !prev)}>
-                <Text style={styles.showHideText}>{showPassword ? 'Hide' : 'Show'}</Text>
+          <View style={styles.keypadGrid}>
+            {KEYS.map((key) => (
+              <Pressable key={key} onPress={() => onKeyPress(key)} style={styles.keypadButton}>
+                {key === 'DEL' ? (
+                  <Feather color={Colors.brandOrange} name="delete" size={20} />
+                ) : (
+                  <Text allowFontScaling={false} style={styles.keypadText}>{key}</Text>
+                )}
               </Pressable>
-            </View>
+            ))}
+          </View>
 
-            <View style={styles.modalActions}>
-              <PrimaryButton title="Cancel" onPress={() => setShowConfirm(false)} />
-              <PrimaryButton title="Charge Customer" onPress={onConfirmPayment} loading={submitting} />
+          <View style={styles.tabSwitcher}>
+            <Pressable onPress={() => setTab('qr')} style={[styles.tabPill, tab === 'qr' && styles.tabPillActive]}>
+              <Text allowFontScaling={false} style={[styles.tabText, tab === 'qr' && styles.tabTextActive]}>QR Code</Text>
+            </Pressable>
+            <Pressable onPress={() => setTab('nfc')} style={[styles.tabPill, tab === 'nfc' && styles.tabPillActive]}>
+              <Text allowFontScaling={false} style={[styles.tabText, tab === 'nfc' && styles.tabTextActive]}>NFC Tap</Text>
+            </Pressable>
+          </View>
+
+          {tab === 'qr' ? (
+            <GradientCard style={styles.qrCard}>
+              {merchantAddress ? (
+                <View style={styles.qrWrap}>
+                  <QRCode
+                    backgroundColor={Colors.surface}
+                    color={Colors.offWhite}
+                    size={200}
+                    value={`${merchantAddress}:${amountValue}:${asset}`}
+                  />
+                </View>
+              ) : (
+                <Text allowFontScaling={false} style={styles.helperText}>
+                  Wallet address unavailable. Finish wallet setup to generate payment requests.
+                </Text>
+              )}
+              <View style={styles.qrFooter}>
+                <AddressChip
+                  address={merchantAddress || '0x0000'}
+                  chain={asset === 'SOL' || asset === 'USDC_SOL' ? 'SOL' : 'ETH'}
+                />
+                <OrangeButton label="Share Address" onPress={onShareAddress} size="sm" variant="outline" />
+              </View>
+            </GradientCard>
+          ) : (
+            <GradientCard style={styles.nfcCard}>
+              <View style={styles.nfcWrap}>
+                <NFCRingAnimation state={scanState} />
+              </View>
+              <View style={[styles.statusPill, scanState === 'scanning' ? styles.statusActive : styles.statusInactive]}>
+                <View style={[styles.statusDot, scanState === 'scanning' ? styles.statusDotActive : styles.statusDotInactive]} />
+                <Text allowFontScaling={false} style={styles.statusText}>
+                  {scanState === 'scanning' ? 'NFC Active' : 'NFC Inactive'}
+                </Text>
+              </View>
+              <Text allowFontScaling={false} style={styles.helperText}>
+                {scanState === 'scanning' ? 'Waiting for customer to tap card...' : scanStatus}
+              </Text>
+            </GradientCard>
+          )}
+
+          {!receivedTx ? (
+            <View>
+              <View style={styles.sectionHeader}>
+                <Text allowFontScaling={false} style={styles.sectionTitle}>Recent Payments</Text>
+              </View>
+              <GradientCard>
+                {recentPayments.length === 0 ? (
+                  <Text allowFontScaling={false} style={styles.helperText}>No recent payments yet.</Text>
+                ) : (
+                  recentPayments.map((tx, index) => (
+                    <View key={tx.id} style={[styles.txRow, index > 0 && styles.txDivider]}>
+                      <TransactionRow
+                        address={tx.to}
+                        amount={tx.amount}
+                        asset={tx.asset}
+                        direction="received"
+                        status={tx.status}
+                        timestamp={tx.timestamp}
+                      />
+                    </View>
+                  ))
+                )}
+              </GradientCard>
             </View>
-          </GlassCard>
-        </View>
-      </Modal>
-    </ScrollView>
+          ) : null}
+        </ScrollView>
+
+        <Modal animationType="slide" transparent visible={showSheet}>
+          <View style={styles.sheetBackdrop}>
+            <GradientCard style={styles.sheetCard}>
+              <Text allowFontScaling={false} style={styles.sheetTitle}>Customer Authentication</Text>
+              <Text allowFontScaling={false} style={styles.sheetSubtitle}>
+                Ask the customer to enter their wallet password.
+              </Text>
+              <View style={styles.badge}>
+                <Text allowFontScaling={false} style={styles.badgeText}>Entered on your device, not shared</Text>
+              </View>
+              <View>
+                <TextInput
+                  allowFontScaling={false}
+                  autoCapitalize="none"
+                  onChangeText={setCustomerPassword}
+                  placeholder="Customer wallet password"
+                  placeholderTextColor={Colors.textFaint}
+                  secureTextEntry={!showPassword}
+                  style={styles.passwordInput}
+                  value={customerPassword}
+                />
+                <Pressable onPress={() => setShowPassword((value) => !value)} style={styles.eyeButton}>
+                  <Feather color={Colors.brandOrange} name={showPassword ? 'eye-off' : 'eye'} size={18} />
+                </Pressable>
+              </View>
+              <View style={styles.pinArea}>
+                <PinDot filled={Math.min(customerPassword.length, 6)} total={6} />
+              </View>
+
+              {processing ? (
+                <View>
+                  {PROGRESS_STEPS.map((label, index) => (
+                    <View key={label} style={styles.progressRow}>
+                      {index < progressIndex ? (
+                        <Feather color={Colors.success} name="check-circle" size={16} />
+                      ) : index === progressIndex ? (
+                        <ActivityIndicator color={Colors.brandOrange} size="small" />
+                      ) : (
+                        <View style={styles.progressDot} />
+                      )}
+                      <Text allowFontScaling={false} style={styles.progressText}>{label}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <OrangeButton label="Process Payment" onPress={onProcessPayment} size="lg" />
+              )}
+              <OrangeButton label="Close" onPress={() => setShowSheet(false)} size="md" variant="ghost" />
+            </GradientCard>
+          </View>
+        </Modal>
+
+        <Modal animationType="slide" transparent visible={!!receivedTx}>
+          <View style={styles.overlay}>
+            <View style={styles.overlayContent}>
+              <Svg height={116} viewBox="0 0 120 120" width={116}>
+                <Circle cx="60" cy="60" fill="none" r="44" stroke={Colors.success} strokeWidth={6} />
+                <Path
+                  d="M38 60l14 14 30-32"
+                  fill="none"
+                  stroke={Colors.success}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={8}
+                />
+              </Svg>
+              <Text allowFontScaling={false} style={styles.overlayTitle}>Payment Received!</Text>
+              <Text allowFontScaling={false} style={styles.overlayAmount}>
+                {receivedTx?.amount} {receivedTx?.asset}
+              </Text>
+              <AddressChip
+                address={merchantAddress || '0x0000'}
+                chain={asset === 'SOL' || asset === 'USDC_SOL' ? 'SOL' : 'ETH'}
+              />
+              {receivedTx?.txHash ? (
+                <Text allowFontScaling={false} style={styles.overlayHash}>{receivedTx.txHash}</Text>
+              ) : null}
+              <View style={styles.overlayButtons}>
+                <OrangeButton
+                  label="New Payment"
+                  onPress={() => {
+                    setReceivedTx(null);
+                    setAmount('');
+                  }}
+                  size="md"
+                />
+                <OrangeButton
+                  label="View Transaction"
+                  onPress={() => (receivedTx?.txHash ? Alert.alert('Transaction', receivedTx.txHash) : undefined)}
+                  size="md"
+                  variant="outline"
+                />
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </Animated.View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    padding: theme.spacing.lg,
-    paddingBottom: 44,
-    backgroundColor: theme.colors.background,
-  },
-  tabRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  tabButton: {
+  safeArea: {
+    backgroundColor: Colors.deepDark,
     flex: 1,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
-    paddingVertical: 10,
+  },
+  flex: {
+    flex: 1,
+  },
+  container: {
+    paddingBottom: 100,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+  },
+  headerRow: {
     alignItems: 'center',
-    backgroundColor: theme.colors.surfaceAlt,
-  },
-  tabButtonActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: 'rgba(42,230,215,0.1)',
-  },
-  tabText: {
-    color: theme.colors.textSecondary,
-    fontWeight: '700',
-  },
-  tabTextActive: {
-    color: theme.colors.accent,
-  },
-  assetRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: theme.spacing.sm,
+    justifyContent: 'space-between',
+    marginBottom: Spacing.md,
   },
-  assetChip: {
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
-    paddingHorizontal: 12,
+  title: {
+    ...Typography.displayMd,
+    color: Colors.offWhite,
+  },
+  chainScroll: {
+    marginBottom: Spacing.md,
+  },
+  chainRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  chainPill: {
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.full,
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    paddingHorizontal: 14,
     paddingVertical: 10,
   },
-  assetChipActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: 'rgba(42,230,215,0.1)',
+  chainPillActive: {
+    backgroundColor: Colors.brandOrange,
   },
-  assetChipText: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
+  chainText: {
+    ...Typography.labelSm,
+    color: Colors.textMuted,
   },
-  assetChipTextActive: {
-    color: theme.colors.accent,
+  chainTextActive: {
+    color: Colors.offWhite,
   },
-  amountDisplay: {
-    color: theme.colors.textPrimary,
-    fontSize: 34,
-    fontWeight: '800',
-    textAlign: 'right',
-    marginBottom: theme.spacing.md,
+  amountCard: {
+    alignItems: 'center',
+    marginBottom: Spacing.lg,
+  },
+  amountText: {
+    ...Typography.heroBalance,
+    color: Colors.offWhite,
+    fontSize: 48,
+  },
+  currencyText: {
+    ...Typography.heading3,
+    color: Colors.textMuted,
+    marginTop: Spacing.sm,
+  },
+  usdText: {
+    ...Typography.caption,
+    color: Colors.textFaint,
+    marginTop: Spacing.xs,
   },
   keypadGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    gap: Spacing.sm,
     justifyContent: 'space-between',
-    gap: 8,
+    marginBottom: Spacing.lg,
   },
-  key: {
-    width: '31%',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
-    paddingVertical: 14,
+  keypadButton: {
     alignItems: 'center',
-    backgroundColor: theme.colors.surfaceAlt,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    height: 64,
+    justifyContent: 'center',
+    width: '23%',
   },
-  keyText: {
-    color: theme.colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '700',
+  keypadText: {
+    ...Typography.displaySm,
+    color: Colors.offWhite,
+    fontSize: 22,
   },
-  infoTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 6,
+  tabSwitcher: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.full,
+    flexDirection: 'row',
+    marginBottom: Spacing.lg,
+    padding: 4,
   },
-  infoBody: {
-    color: theme.colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
+  tabPill: {
+    alignItems: 'center',
+    borderRadius: Radius.full,
+    flex: 1,
+    paddingVertical: 10,
+  },
+  tabPillActive: {
+    backgroundColor: Colors.brandOrange,
+  },
+  tabText: {
+    ...Typography.label,
+    color: Colors.textMuted,
+  },
+  tabTextActive: {
+    color: Colors.offWhite,
+  },
+  qrCard: {
+    alignItems: 'center',
   },
   qrWrap: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+  },
+  qrFooter: {
     alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: theme.spacing.md,
-  },
-  previewText: {
-    color: theme.colors.textSecondary,
-    fontSize: 11,
-    marginTop: theme.spacing.sm,
-  },
-  statusChip: {
-    marginTop: theme.spacing.sm,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    backgroundColor: theme.colors.surfaceAlt,
-  },
-  input: {
-    backgroundColor: theme.colors.surfaceAlt,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
-    color: theme.colors.textPrimary,
-    padding: theme.spacing.md,
-    marginBottom: theme.spacing.sm,
-    fontSize: 15,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    padding: theme.spacing.lg,
-  },
-  modalTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 18,
-    fontWeight: '800',
-    marginBottom: theme.spacing.sm,
-  },
-  modalLine: {
-    color: theme.colors.textSecondary,
-    fontSize: 13,
-    marginBottom: 4,
-  },
-  passwordRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    marginTop: Spacing.lg,
+    width: '100%',
   },
-  passwordInput: {
+  nfcCard: {
+    alignItems: 'center',
+  },
+  nfcWrap: {
+    marginBottom: Spacing.lg,
+  },
+  statusPill: {
+    alignItems: 'center',
+    borderRadius: Radius.full,
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  statusActive: {
+    backgroundColor: Colors.successDim,
+  },
+  statusInactive: {
+    backgroundColor: Colors.borderSubtle,
+  },
+  statusDot: {
+    borderRadius: Radius.full,
+    height: 10,
+    width: 10,
+  },
+  statusDotActive: {
+    backgroundColor: Colors.success,
+  },
+  statusDotInactive: {
+    backgroundColor: Colors.textFaint,
+  },
+  statusText: {
+    ...Typography.labelSm,
+    color: Colors.offWhite,
+  },
+  helperText: {
+    ...Typography.bodySm,
+    color: Colors.textMuted,
+    textAlign: 'center',
+  },
+  sectionHeader: {
+    marginBottom: Spacing.sm,
+    marginTop: Spacing.sm,
+  },
+  sectionTitle: {
+    ...Typography.heading3,
+    color: Colors.offWhite,
+  },
+  txRow: {
+    paddingVertical: 2,
+  },
+  txDivider: {
+    borderTopColor: Colors.borderSubtle,
+    borderTopWidth: 1,
+  },
+  sheetBackdrop: {
+    backgroundColor: Colors.overlay,
     flex: 1,
+    justifyContent: 'flex-end',
+    padding: Spacing.lg,
+  },
+  sheetCard: {
     marginBottom: 0,
   },
-  showHideBtn: {
+  sheetTitle: {
+    ...Typography.heading2,
+    color: Colors.offWhite,
+    marginBottom: Spacing.xs,
+  },
+  sheetSubtitle: {
+    ...Typography.bodySm,
+    color: Colors.textMuted,
+    marginBottom: Spacing.md,
+  },
+  badge: {
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.orangeDim,
+    borderColor: Colors.orangeMid,
+    borderRadius: Radius.full,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
+    marginBottom: Spacing.md,
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    backgroundColor: theme.colors.surfaceAlt,
+    paddingVertical: 8,
   },
-  showHideText: {
-    color: theme.colors.accent,
-    fontSize: 12,
-    fontWeight: '700',
+  badgeText: {
+    ...Typography.caption,
+    color: Colors.brandOrange,
   },
-  modalActions: {
-    marginTop: theme.spacing.sm,
-    gap: 8,
+  passwordInput: {
+    ...Typography.body,
+    backgroundColor: Colors.borderSubtle,
+    borderColor: Colors.borderMid,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    color: Colors.offWhite,
+    paddingHorizontal: Spacing.md,
+    paddingRight: 48,
+    paddingVertical: 14,
+  },
+  eyeButton: {
+    position: 'absolute',
+    right: Spacing.md,
+    top: 14,
+  },
+  pinArea: {
+    marginBottom: Spacing.md,
+    marginTop: Spacing.md,
+  },
+  progressRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  progressDot: {
+    backgroundColor: Colors.orangeMid,
+    borderRadius: Radius.full,
+    height: 10,
+    width: 10,
+  },
+  progressText: {
+    ...Typography.bodySm,
+    color: Colors.textMuted,
+  },
+  overlay: {
+    alignItems: 'center',
+    backgroundColor: Colors.deepDark,
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  overlayContent: {
+    alignItems: 'center',
+    paddingHorizontal: Spacing.xl,
+  },
+  overlayTitle: {
+    ...Typography.displayTitle,
+    color: Colors.offWhite,
+    marginTop: Spacing.lg,
+  },
+  overlayAmount: {
+    ...Typography.displayMd,
+    color: Colors.success,
+    marginBottom: Spacing.md,
+    marginTop: Spacing.sm,
+  },
+  overlayHash: {
+    ...Typography.monoXs,
+    color: Colors.brandOrange,
+    marginTop: Spacing.md,
+  },
+  overlayButtons: {
+    flexDirection: 'row',
+    gap: Spacing.md,
+    marginTop: Spacing.xl,
   },
 });

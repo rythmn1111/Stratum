@@ -8,6 +8,9 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import { Colors, Radius, Shadows, Spacing } from '../../theme/colors';
 
+const gradientStart = { x: 0, y: 0 };
+const gradientEnd = { x: 1, y: 1 };
+
 type GradientCardProps = PropsWithChildren<{
   style?: StyleProp<ViewStyle>;
   glowColor?: string;
@@ -46,8 +49,8 @@ export const GradientCard: React.FC<GradientCardProps> = ({
     <View style={[styles.shell, resolveGlowStyle(glowColor), style]}>
       <LinearGradient
         colors={[Colors.surface, Colors.surfaceLow]}
-        start={styles.gradientStart}
-        end={styles.gradientEnd}
+        start={gradientStart}
+        end={gradientEnd}
         style={styles.card}
       >
         {children}
@@ -99,13 +102,5 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 18,
     elevation: 11,
-  },
-  gradientStart: {
-    x: 0,
-    y: 0,
-  },
-  gradientEnd: {
-    x: 1,
-    y: 1,
   },
 });

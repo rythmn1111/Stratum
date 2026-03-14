@@ -4,21 +4,18 @@ import { NavigationContainer, DarkTheme, createNavigationContainerRef } from '@r
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Buffer } from 'buffer';
 import { TabIcon } from '../components/TabIcon';
-import { theme } from '../constants/theme';
+import { GradientCard } from '../components/ui/GradientCard';
+import { OrangeButton } from '../components/ui/OrangeButton';
+import { Colors } from '../theme/colors';
+import { Typography } from '../theme/typography';
 import { useWallet } from '../context/WalletContext';
 import { secureStorage } from '../services/secureStorage';
 import { nfcService } from '../services/nfcService';
-import { OnboardingScreen } from '../screens/OnboardingScreen';
-import { PayScreen } from '../screens/PayScreen';
-import { POSScreen } from '../screens/POSScreen';
-import { ReceiveScreen } from '../screens/ReceiveScreen';
-import { SettingsScreen } from '../screens/SettingsScreen';
-import { WalletScreen } from '../screens/WalletScreen';
+import { OnboardingScreen, POSScreen, PayScreen, SettingsScreen, WalletScreen } from '../screens';
 
 export type AppTabParamList = {
   Wallet: undefined;
   Pay: undefined;
-  POS: undefined;
   Receive: undefined;
   Settings: undefined;
 };
@@ -31,11 +28,11 @@ const walletTheme = {
   ...DarkTheme,
   colors: {
     ...DarkTheme.colors,
-    background: theme.colors.background,
-    card: theme.colors.surface,
-    text: theme.colors.textPrimary,
-    border: theme.colors.border,
-    primary: theme.colors.accent,
+    background: Colors.deepDark,
+    card: Colors.deepDark,
+    text: Colors.offWhite,
+    border: Colors.borderSubtle,
+    primary: Colors.brandOrange,
   },
 };
 
@@ -43,32 +40,26 @@ const AppLockOverlay: React.FC<{
   visible: boolean;
   onUnlock: () => void;
   onLogout: () => void;
-}> = ({ visible, onUnlock, onLogout }) => {
-  return (
-    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
-      <View style={styles.lockBackdrop}>
-        <View style={styles.lockCard}>
-          <Text style={styles.lockTitle}>App Locked</Text>
-          <Text style={styles.lockBody}>App moved to background. Unlock to continue wallet usage.</Text>
-          <Pressable style={styles.unlockBtn} onPress={onUnlock}>
-            <Text style={styles.unlockBtnText}>Unlock App</Text>
-          </Pressable>
-          <Pressable style={styles.logoutBtn} onPress={onLogout}>
-            <Text style={styles.logoutBtnText}>Logout</Text>
-          </Pressable>
-        </View>
-      </View>
-    </Modal>
-  );
-};
+}> = ({ visible, onUnlock, onLogout }) => (
+  <Modal animationType="fade" statusBarTranslucent transparent visible={visible}>
+    <View style={styles.lockBackdrop}>
+      <GradientCard glowColor={Colors.orangeGlow} style={styles.lockCard}>
+        <Text allowFontScaling={false} style={styles.lockTitle}>App Locked</Text>
+        <Text allowFontScaling={false} style={styles.lockBody}>The wallet locked when the app moved to the background.</Text>
+        <OrangeButton label="Unlock App" onPress={onUnlock} size="lg" />
+        <View style={styles.lockSpacer} />
+        <OrangeButton label="Logout" onPress={onLogout} size="md" variant="outline" />
+      </GradientCard>
+    </View>
+  </Modal>
+);
 
 export const AppNavigator: React.FC = () => {
   const { isSetupComplete, hydrateWallet, initializeNfc, logout, userId, posToken } = useWallet();
-
   const [booting, setBooting] = useState(true);
   const [nfcError, setNfcError] = useState<string | null>(null);
   const [appLocked, setAppLocked] = useState(false);
-
+  const [onboardingHold, setOnboardingHold] = useState(false);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   useEffect(() => {
@@ -109,22 +100,19 @@ export const AppNavigator: React.FC = () => {
         return;
       }
 
-      const movedToBackground = prev === 'active' && (nextState === 'background' || nextState === 'inactive');
-      if (movedToBackground) {
+      if (prev === 'active' && (nextState === 'background' || nextState === 'inactive')) {
         setAppLocked(true);
       }
     });
 
-    return () => {
-      sub.remove();
-    };
+    return () => sub.remove();
   }, [isSetupComplete]);
 
   const runRelinkFlow = useCallback(async () => {
     try {
       const localShare = await secureStorage.getLocalShareA();
       if (!localShare) {
-        Alert.alert('Relink failed', 'No local Share A found. Setup wallet again to relink card.');
+        Alert.alert('Relink failed', 'No local Share A found. Set up the wallet again to relink a card.');
         return;
       }
 
@@ -136,22 +124,16 @@ export const AppNavigator: React.FC = () => {
         },
       });
 
-      Alert.alert('Relink complete', 'NFC card has been relinked successfully.');
+      Alert.alert('Relink complete', 'Your NFC card has been relinked successfully.');
     } catch (error) {
-      Alert.alert('Relink failed', error instanceof Error ? error.message : 'Unable to relink NFC card.');
+      Alert.alert('Relink failed', error instanceof Error ? error.message : 'Unable to relink the NFC card.');
     }
   }, [posToken, userId]);
 
   const runClearFlow = useCallback(() => {
-    Alert.alert('Clear local wallet', 'This clears local auth and profile data from this device.', [
+    Alert.alert('Clear local wallet', 'This removes local auth and profile data from this device.', [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear Now',
-        style: 'destructive',
-        onPress: () => {
-          logout().catch(() => undefined);
-        },
-      },
+      { text: 'Clear Now', style: 'destructive', onPress: () => logout().catch(() => undefined) },
     ]);
   }, [logout]);
 
@@ -163,81 +145,92 @@ export const AppNavigator: React.FC = () => {
     ]);
   }, [runClearFlow, runRelinkFlow]);
 
-  const tabScreens = useMemo(() => {
-    return (
+  const tabs = useMemo(
+    () => (
       <Tab.Navigator
         screenOptions={({ route }) => {
           const routeToIcon: Record<keyof AppTabParamList, 'wallet' | 'pay' | 'receive' | 'settings'> = {
             Wallet: 'wallet',
             Pay: 'pay',
-            POS: 'receive',
             Receive: 'receive',
             Settings: 'settings',
           };
 
           return {
             headerShown: false,
+            tabBarShowLabel: false,
             tabBarStyle: {
-              backgroundColor: theme.colors.surface,
-              borderTopColor: theme.colors.border,
-              height: 62,
+              backgroundColor: Colors.deepDark,
+              borderTopColor: Colors.borderSubtle,
+              height: 72,
               paddingBottom: 10,
               paddingTop: 8,
             },
-            tabBarActiveTintColor: theme.colors.accent,
-            tabBarInactiveTintColor: theme.colors.textSecondary,
-            tabBarLabelStyle: {
-              fontSize: 11,
-              fontWeight: '600',
-            },
-            tabBarIcon: ({ color, size }) => (
-              <TabIcon name={routeToIcon[route.name]} color={color} size={size} />
+            tabBarActiveTintColor: Colors.brandOrange,
+            tabBarInactiveTintColor: Colors.textMuted,
+            tabBarIcon: ({ color, size, focused }) => (
+              <TabIcon color={color} focused={focused} label={route.name} name={routeToIcon[route.name]} size={size} />
             ),
+            tabBarButton:
+              route.name === 'Pay'
+                ? ({ accessibilityLabel, accessibilityState, children, onLongPress, onPress, testID }) => (
+                    <Pressable
+                      accessibilityLabel={accessibilityLabel}
+                      accessibilityRole="button"
+                      accessibilityState={accessibilityState}
+                      onLongPress={onLongPress}
+                      onPress={onPress}
+                      style={styles.payTabButton}
+                      testID={testID}
+                    >
+                      <View style={styles.payFab}>
+                        <TabIcon color={Colors.offWhite} name="pay" size={24} />
+                        {children}
+                      </View>
+                    </Pressable>
+                  )
+                : undefined,
           };
         }}
       >
         <Tab.Screen name="Wallet" component={WalletScreen} />
         <Tab.Screen name="Pay" component={PayScreen} />
-        <Tab.Screen name="POS" component={POSScreen} />
-        <Tab.Screen name="Receive" component={ReceiveScreen} />
+        <Tab.Screen name="Receive" component={POSScreen} />
         <Tab.Screen
+          listeners={{ tabLongPress: () => onSettingsTabLongPress() }}
           name="Settings"
           component={SettingsScreen}
-          listeners={{
-            tabLongPress: () => {
-              onSettingsTabLongPress();
-            },
-          }}
         />
       </Tab.Navigator>
-    );
-  }, [onSettingsTabLongPress]);
+    ),
+    [onSettingsTabLongPress],
+  );
 
   if (booting) {
     return (
       <View style={styles.bootWrap}>
-        <Text style={styles.bootText}>Loading wallet profile...</Text>
+        <Text allowFontScaling={false} style={styles.bootText}>Loading wallet profile...</Text>
       </View>
     );
   }
 
-  if (!isSetupComplete) {
-    return <OnboardingScreen />;
+  if (!isSetupComplete || onboardingHold) {
+    return <OnboardingScreen onSetupComplete={() => setOnboardingHold(false)} onSetupStart={() => setOnboardingHold(true)} />;
   }
 
   return (
     <View style={styles.root}>
-      {nfcError ? <Text style={styles.errorBanner}>{nfcError}</Text> : null}
+      {nfcError ? <Text allowFontScaling={false} style={styles.errorBanner}>{nfcError}</Text> : null}
       <NavigationContainer ref={rootNavigationRef} theme={walletTheme}>
-        {tabScreens}
+        {tabs}
       </NavigationContainer>
       <AppLockOverlay
         visible={appLocked}
-        onUnlock={() => setAppLocked(false)}
         onLogout={() => {
           setAppLocked(false);
           logout().catch(() => undefined);
         }}
+        onUnlock={() => setAppLocked(false)}
       />
     </View>
   );
@@ -245,80 +238,68 @@ export const AppNavigator: React.FC = () => {
 
 const styles = StyleSheet.create({
   root: {
+    backgroundColor: Colors.deepDark,
     flex: 1,
-    backgroundColor: theme.colors.background,
   },
   bootWrap: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
     alignItems: 'center',
+    backgroundColor: Colors.deepDark,
+    flex: 1,
     justifyContent: 'center',
   },
   bootText: {
-    color: theme.colors.textSecondary,
-    fontSize: 14,
+    ...Typography.body,
+    color: Colors.textMuted,
   },
   errorBanner: {
-    color: theme.colors.warning,
-    backgroundColor: theme.colors.surface,
-    borderColor: theme.colors.border,
-    borderWidth: 1,
-    marginHorizontal: theme.spacing.md,
-    marginTop: theme.spacing.sm,
-    padding: theme.spacing.sm,
-    borderRadius: theme.radius.sm,
+    ...Typography.labelSm,
+    backgroundColor: Colors.errorDim,
+    color: Colors.error,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     textAlign: 'center',
   },
   lockBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.72)',
     alignItems: 'center',
+    backgroundColor: Colors.overlay,
+    flex: 1,
     justifyContent: 'center',
-    padding: theme.spacing.lg,
+    padding: 24,
   },
   lockCard: {
+    maxWidth: 340,
     width: '100%',
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.lg,
   },
   lockTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 20,
-    fontWeight: '800',
+    ...Typography.displayMd,
+    color: Colors.offWhite,
     marginBottom: 8,
   },
   lockBody: {
-    color: theme.colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: theme.spacing.md,
+    ...Typography.body,
+    color: Colors.textMuted,
+    marginBottom: 18,
   },
-  unlockBtn: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.md,
-    paddingVertical: 12,
+  lockSpacer: {
+    height: 10,
+  },
+  payTabButton: {
     alignItems: 'center',
-    marginBottom: 8,
+    flex: 1,
+    justifyContent: 'center',
+    marginTop: -10,
   },
-  unlockBtnText: {
-    color: theme.colors.background,
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  logoutBtn: {
-    borderWidth: 1,
-    borderColor: theme.colors.danger,
-    borderRadius: theme.radius.md,
-    paddingVertical: 12,
+  payFab: {
     alignItems: 'center',
-    backgroundColor: 'rgba(244,91,105,0.12)',
-  },
-  logoutBtnText: {
-    color: theme.colors.danger,
-    fontWeight: '800',
-    fontSize: 14,
+    backgroundColor: Colors.brandOrange,
+    borderRadius: 28,
+    elevation: 10,
+    height: 56,
+    justifyContent: 'center',
+    shadowColor: Colors.brandOrange,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    width: 56,
   },
 });

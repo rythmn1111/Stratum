@@ -1,25 +1,3 @@
-import React, { useEffect, useState } from 'react';
-import Clipboard from '@react-native-clipboard/clipboard';
-import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { GlassCard } from '../components/GlassCard';
-import { PrimaryButton } from '../components/PrimaryButton';
-import { SectionLabel } from '../components/SectionLabel';
-import { theme } from '../constants/theme';
-import { useWallet } from '../context/WalletContext';
-import { generateMnemonic, validateMnemonic } from '../services/cryptoService';
-
-type Step = 'welcome' | 'seed' | 'password' | 'nfc';
 import React, { useState } from 'react';
 import { SetupWalletScreen } from './onboarding/SetupWalletScreen';
 import { WelcomeScreen } from './onboarding/WelcomeScreen';
@@ -45,6 +23,3 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ onSetupStart
     />
   );
 };
-    setStep('seed');
-
-  };

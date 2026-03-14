@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Circle, Defs, Ellipse, LinearGradient as SvgLinearGradient, Path, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, Ellipse, LinearGradient as SvgLinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import { OrangeButton } from '../../components/ui/OrangeButton';
 import { Colors, Radius, Spacing } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
@@ -58,17 +58,11 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onCreate, onImport
                 strokeWidth="6"
               />
               <Circle cx="88" cy="94" fill={Colors.brandOrange} r="24" />
-              <Text allowFontScaling={false} fill={Colors.offWhite} fontFamily="Inter-Bold" fontSize="16" x="79" y="100">
-                ETH
-              </Text>
+              <SvgText fill={Colors.offWhite} fontFamily="Inter-Bold" fontSize="16" x="79" y="100">ETH</SvgText>
               <Circle cx="302" cy="148" fill={Colors.success} r="22" />
-              <Text allowFontScaling={false} fill={Colors.deepDark} fontFamily="Inter-Bold" fontSize="16" x="293" y="154">
-                SOL
-              </Text>
+              <SvgText fill={Colors.deepDark} fontFamily="Inter-Bold" fontSize="16" x="293" y="154">SOL</SvgText>
               <Circle cx="274" cy="266" fill={Colors.offWhite} r="20" />
-              <Text allowFontScaling={false} fill={Colors.deepDark} fontFamily="Inter-Bold" fontSize="14" x="262" y="271">
-                USDC
-              </Text>
+              <SvgText fill={Colors.deepDark} fontFamily="Inter-Bold" fontSize="14" x="262" y="271">USDC</SvgText>
             </Svg>
           </View>
 
